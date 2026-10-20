@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.venv/
+.idea/
+.vscode/
+*.egg-info/
+dist/
+build/
+
+# Numba cache
+*.nbi
+*.nbc
+
+# Generated data and results
+data/scenarios/*
+!data/scenarios/.gitkeep
+results/*
+!results/.gitkeep
+library_cache/

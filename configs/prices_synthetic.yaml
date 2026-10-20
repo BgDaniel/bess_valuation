@@ -1,0 +1,45 @@
+# Draft parameters for the synthetic price generator (SPEC 2.3).
+# Plausible defaults to be tuned, not a calibration. Keys are finalised in milestone 1.
+level:
+  mean: 85.0              # EUR/MWh, annual mean of L_d
+  seasonal_amplitude: 20.0  # EUR/MWh, annual cosine, peak in winter
+  weekend_offset: -15.0   # EUR/MWh
+  holiday_offset: -20.0   # EUR/MWh
+  ar_phi: 0.85            # AR(1) coefficient across days
+  ar_sigma: 12.0          # EUR/MWh, innovation std
+peak:
+  mean: 30.0              # EUR/MWh, mean of A_d
+  ar_phi: 0.7
+  ar_sigma: 8.0
+  corr_with_level: 0.5
+  weekend_damping: 0.6
+solar:
+  mean_summer: 70.0       # EUR/MWh, seasonal mean of B_d
+  mean_winter: 10.0
+  ar_phi: 0.6
+  ar_sigma: 20.0
+intraday_noise:
+  ar_phi: 0.9             # AR(1) within the day
+  sigma: 4.0              # EUR/MWh
+spikes:
+  pos_rate_per_day: 0.05
+  pos_mean_size: 150.0    # EUR/MWh
+  neg_rate_per_day: 0.03
+  neg_mean_size: 60.0     # EUR/MWh
+quarter_hour:
+  sawtooth_amplitude: 5.0 # EUR/MWh
+ida:
+  bias: [0.0, 0.0, 0.0]
+  solar_sigma: [4.0, 6.0, 9.0]   # EUR/MWh per stage IDA1, IDA2, IDA3
+  level_sigma: [2.0, 3.0, 4.0]
+  noise_sigma: [3.0, 4.0, 6.0]
+holidays:
+  - "2027-01-01"
+  - "2027-03-26"
+  - "2027-03-29"
+  - "2027-05-01"
+  - "2027-05-06"
+  - "2027-05-17"
+  - "2027-10-03"
+  - "2027-12-25"
+  - "2027-12-26"
