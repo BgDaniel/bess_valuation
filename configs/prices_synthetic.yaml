@@ -1,45 +1,68 @@
-# Draft parameters for the synthetic price generator (SPEC 2.3).
-# Plausible defaults to be tuned, not a calibration. Keys are finalised in milestone 1.
-level:
-  mean: 85.0              # EUR/MWh, annual mean of L_d
-  seasonal_amplitude: 20.0  # EUR/MWh, annual cosine, peak in winter
-  weekend_offset: -15.0   # EUR/MWh
-  holiday_offset: -20.0   # EUR/MWh
-  ar_phi: 0.85            # AR(1) coefficient across days
-  ar_sigma: 12.0          # EUR/MWh, innovation std
-peak:
-  mean: 30.0              # EUR/MWh, mean of A_d
-  ar_phi: 0.7
-  ar_sigma: 8.0
-  corr_with_level: 0.5
-  weekend_damping: 0.6
-solar:
-  mean_summer: 70.0       # EUR/MWh, seasonal mean of B_d
-  mean_winter: 10.0
-  ar_phi: 0.6
-  ar_sigma: 20.0
-intraday_noise:
-  ar_phi: 0.9             # AR(1) within the day
-  sigma: 4.0              # EUR/MWh
-spikes:
-  pos_rate_per_day: 0.05
-  pos_mean_size: 150.0    # EUR/MWh
-  neg_rate_per_day: 0.03
-  neg_mean_size: 60.0     # EUR/MWh
-quarter_hour:
-  sawtooth_amplitude: 5.0 # EUR/MWh
-ida:
-  bias: [0.0, 0.0, 0.0]
-  solar_sigma: [4.0, 6.0, 9.0]   # EUR/MWh per stage IDA1, IDA2, IDA3
-  level_sigma: [2.0, 3.0, 4.0]
-  noise_sigma: [3.0, 4.0, 6.0]
+# Synthetic price generator (SPEC 2.3). Plausible defaults to be tuned, not a calibration.
+# Prices in EUR/MWh, hours in h. Missing keys fall back to the defaults in
+# bess_valuation.price_generator.PriceGeneratorConfig.
+
+# daily level L_d: seasonal mean (higher in winter), calendar offsets, AR(1) deviation
+level_mean: 85.0
+level_seasonal_amplitude: 15.0
+weekend_offset: -12.0
+holiday_offset: -15.0
+level_ar_phi: 0.8
+level_ar_sigma: 10.0
+
+# peak factor A_d and peak template (morning + evening hump)
+peak_mean: 30.0
+peak_ar_phi: 0.6
+peak_ar_sigma: 6.0
+peak_level_corr: 0.5
+weekend_peak_damping: 0.6
+peak_morning_hour: 8.0
+peak_morning_width: 1.5
+peak_morning_summer_weight: 0.3
+peak_evening_hour_winter: 18.5
+peak_evening_hour_summer: 20.5
+peak_evening_width: 2.0
+
+# solar factor B_d (log-normal AR(1), seasonal mean) and midday template
+solar_mean_winter: 12.0
+solar_mean_summer: 60.0
+solar_ar_phi: 0.5
+solar_log_sigma: 0.4
+solar_noon: 13.0
+solar_width_winter: 1.6
+solar_width_summer: 3.0
+
+# intraday AR(1) noise
+noise_phi_hour: 0.7
+noise_sigma: 4.0
+
+# spikes: positive evening jumps, negative midday jumps on weekends / holidays
+spike_pos_rate: 0.08
+spike_pos_mean: 120.0
+spike_pos_hours: [17, 18, 19, 20]
+spike_neg_rate: 0.15
+spike_neg_mean: 50.0
+spike_neg_hours: [11, 12, 13, 14]
+
+# quarter-hour sawtooth around the ramps (dt = 0.25 only)
+quarter_hour_amplitude: 5.0
+ramp_up_hours: [6, 7, 8]
+ramp_down_hours: [19, 20, 21, 22]
+
+# IDA forecast-update shocks per stage (IDA1, IDA2, IDA3)
+ida_bias: [0.0, 0.0, 0.0]
+ida_solar_sigma: [4.0, 6.0, 9.0]
+ida_level_sigma: [2.0, 3.0, 4.0]
+ida_noise_sigma: [3.0, 4.0, 6.0]
+
+# public holidays: "YYYY-MM-DD" (single date) or "MM-DD" (every year)
 holidays:
-  - "2027-01-01"
+  - "01-01"
+  - "05-01"
+  - "10-03"
+  - "12-25"
+  - "12-26"
   - "2027-03-26"
   - "2027-03-29"
-  - "2027-05-01"
   - "2027-05-06"
   - "2027-05-17"
-  - "2027-10-03"
-  - "2027-12-25"
-  - "2027-12-26"

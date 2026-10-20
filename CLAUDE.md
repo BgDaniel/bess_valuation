@@ -12,10 +12,14 @@ Full specification: [docs/SPEC.md](docs/SPEC.md). Read it before working on a mi
 - Hot loops in Numba (`@njit`, `prange`). No external LP solver in the hot loop; HiGHS/scipy only in tests as reference.
 - When iterating, change only what the user explicitly asks for. Never reintroduce LP calls into the backward induction.
 - Work in milestones (SPEC section 9); after each milestone run the tests and show a short summary plus the plots.
+- Logging via the standard `logging` module (`logger = logging.getLogger(__name__)`) in every
+  long-running step; the CLI configures the level (`--log-level`). Long loops show a `tqdm`
+  progress bar — in particular the backward induction over days and SoC grid points (lsmc.py),
+  the forward simulation and the lambda calibration.
 
 ## Milestone status
 
-- [ ] 1. Config, prices (loaders + generator + plots), polytope, Numba simplex vs HiGHS
+- [x] 1. Config, prices (loaders + generator + plots), polytope, Numba simplex vs HiGHS
 - [ ] 2. Vertex library, certificate, persistence; DA-only daily lookup
 - [ ] 3. LSMC DA-only, forward simulation, output folder, plots 1, 2, 4, 5, 9, 12
 - [ ] 4. IDA1–3 stages, half-day library, plots 3, 6, 8
