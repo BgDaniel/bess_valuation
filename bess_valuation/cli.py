@@ -1,7 +1,7 @@
 """Command line interface.
 
 ``python -m bess_valuation generate-prices --config configs/prices_synthetic.yaml --out data/scenarios/x``
-``python -m bess_valuation run --config configs/x.yaml --prices data/scenarios/`` (milestone 3)
+``python -m bess_valuation run --config configs/x.yaml --prices data/scenarios/``
 """
 
 from __future__ import annotations
@@ -20,6 +20,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--config", required=True, help="battery config YAML")
     run.add_argument("--prices", required=True, help="price scenario folder")
     run.add_argument("--plots", action=argparse.BooleanOptionalAction, default=True)
+    run.add_argument("--n-regression-paths", type=int, default=None,
+                     help="paths for the regression (default: half); the rest are out-of-sample")
+    run.add_argument("--degree", type=int, default=2, help="polynomial degree of the regression basis")
+    run.add_argument("--library-dir", default="library_cache",
+                     help="folder of persisted vertex libraries ('none' to disable)")
+    run.add_argument("--results", default="results", help="results root folder")
 
     gen = sub.add_parser("generate-prices", help="simulate synthetic DA / IDA scenarios")
     gen.add_argument("--config", required=True, help="price generator config YAML")
@@ -45,4 +51,13 @@ def main(argv: list[str] | None = None) -> None:
                                        dt=args.dt, seed=args.seed, scenario_dir=args.out, plot=args.plots)
         logging.getLogger(__name__).info("run folder: %s", run_dir)
     elif args.command == "run":
-        raise NotImplementedError("run_engine is implemented in milestone 3")
+        from bess_valuation import BatteryConfig, EngineSettings, PriceScenarios, run_engine
+
+        config = BatteryConfig.from_yaml(args.config)
+        prices = PriceScenarios.from_files(args.prices)
+        library_dir = None if args.library_dir.lower() == "none" else args.library_dir
+        settings = EngineSettings(n_regression_paths=args.n_regression_paths, degree=args.degree,
+                                  library_dir=library_dir)
+        result = run_engine(config, prices, settings)
+        run_dir = result.save(args.results, plots=args.plots)
+        logging.getLogger(__name__).info("run folder: %s", run_dir)

@@ -50,7 +50,8 @@ prices almost every price vector has its own optimal vertex, so the library main
 supplies warm starts there; queries beyond the cap are still solved exactly.
 
 Good-Turing: the probability that the next query needs an unseen vertex is estimated
-by :math:`n_1/N` (:math:`n_1` vertices hit exactly once, :math:`N` queries).
+by :math:`n_1/N` (:math:`n_1` vertices hit exactly once, :math:`N` queries; queries
+answered by uncached vertices beyond the cap count as singletons).
 """
 
 from __future__ import annotations
@@ -435,7 +436,8 @@ class PairLibrary:
                         seen.add(key)
                         st.uncached += 1
             st.new += self.size - before + len(seen)
-            # keep the full argmax only while it is cheaper than the simplex it saves
+            # keep the full argmax only while it is cheaper than the simplex it saves (this
+            # timing-based switch changes the counters between runs, never the results)
             if t_full and st.full_success * t_simplex < t_full:
                 st.full_success = min(st.full_success, 0.04)
         hit = idx[idx >= 0]
@@ -569,17 +571,18 @@ def library_stats(library: VertexLibrary) -> dict[str, Any]:
     for (s0, s1), lib in sorted(library.pairs.items()):
         st = lib.stats
         hits = lib.hits[:lib.size]
-        n1 = int(np.sum(hits == 1))
+        # queries answered by uncached vertices (library full) count as singletons, an
+        # upper bound since duplicates among them cannot be detected
         n_hits = int(hits.sum())
+        n1 = int(np.sum(hits == 1)) + max(st.queries - n_hits, 0)
         pairs.append({
             "s_start": s0, "s_end": s1, "feasible": lib.feasible, "vertices": lib.size,
             "queries": st.queries, "hit_queries": n_hits, "certified_hot": st.hot,
             "certified_full": st.full, "simplex": st.simplex, "case_split": st.split,
             "new_vertices": st.new, "uncached": st.uncached, "singletons": n1,
-            "good_turing": n1 / n_hits if n_hits else float("nan"),
+            "good_turing": n1 / st.queries if st.queries else float("nan"),
         })
     queries = sum(p["queries"] for p in pairs)
-    hits_total = sum(p["hit_queries"] for p in pairs)
     certified = sum(p["certified_hot"] + p["certified_full"] for p in pairs)
     singletons = sum(p["singletons"] for p in pairs)
     return {
@@ -592,7 +595,7 @@ def library_stats(library: VertexLibrary) -> dict[str, Any]:
         "simplex": sum(p["simplex"] for p in pairs),
         "case_split": sum(p["case_split"] for p in pairs),
         "uncached": sum(p["uncached"] for p in pairs),
-        "good_turing": singletons / hits_total if hits_total else float("nan"),
+        "good_turing": singletons / queries if queries else float("nan"),
         "pairs": pairs,
     }
 

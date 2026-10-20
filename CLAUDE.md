@@ -21,7 +21,7 @@ Full specification: [docs/SPEC.md](docs/SPEC.md). Read it before working on a mi
 
 - [x] 1. Config, prices (loaders + generator + plots), polytope, Numba simplex vs HiGHS
 - [x] 2. Vertex library, certificate, persistence; DA-only daily lookup
-- [ ] 3. LSMC DA-only, forward simulation, output folder, plots 1, 2, 4, 5, 9, 12
+- [x] 3. LSMC DA-only, forward simulation, output folder, plots 1, 2, 4, 5, 9, 12
 - [ ] 4. IDA1–3 stages, half-day library, plots 3, 6, 8
 - [ ] 5. Cycle limit (Lagrange + counter), plot 11
 - [ ] 6. Performance tuning, remaining plots, runtime report

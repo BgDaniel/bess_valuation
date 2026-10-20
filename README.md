@@ -14,7 +14,7 @@ poetry install
 poetry run python -m unittest discover -s tests -v
 ```
 
-## Usage (target interface)
+## Usage
 
 ```python
 from bess_valuation import BatteryConfig, PriceScenarios, run_engine
@@ -30,3 +30,26 @@ CLI:
 ```bash
 poetry run python -m bess_valuation run --config configs/bess_1mw_2mwh.yaml --prices data/scenarios/
 ```
+
+Options: `--n-regression-paths` (default: half of the paths), `--degree` (polynomial
+basis), `--library-dir` (persisted vertex libraries, default `library_cache/`, `none`
+to disable), `--results`, `--plots/--no-plots`. Numerical settings in Python:
+`run_engine(config, prices, EngineSettings(...))`.
+
+End-to-end example (DA only so far): `poetry run python examples/run_synthetic.py`.
+
+## Status
+
+Milestones 1-3 done: prices and generator, polytope, Numba simplex, vertex library
+(exact O(T) certificate, persistence, Good-Turing), DA-only LSMC with control variate and
+concave projection, forward simulation, intrinsic and perfect-foresight values, output
+folder, plots 1, 2, 4, 5, 9, 12. Next: IDA1-3 stages (milestone 4), cycle limit (5),
+performance (6).
+
+Notes:
+- Without simultaneous charge/discharge the per-period case split is solved exactly by a
+  dynamic program over the SoC (piecewise-linear value function); branch and bound grew
+  exponentially with the number of negative-price periods.
+- On quarter-hourly prices nearly every price vector has its own optimal vertex, so the
+  library mostly provides warm starts there (it is capped per SoC pair); on smooth price
+  vectors (conditional means) most queries are answered by the certificate.
