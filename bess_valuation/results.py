@@ -16,10 +16,11 @@ import numpy as np
 import pandas as pd
 
 from bess_valuation.config import BatteryConfig
-from bess_valuation.daily import daily_values, soc_grid
+from bess_valuation.daily import daily_value_table, soc_grid
 from bess_valuation.forward import ForwardResult, attach_schedules, forward_simulation, grid_bellman
 from bess_valuation.io import new_run_dir
-from bess_valuation.library import VertexLibrary, library_path, library_stats, load_or_create, save_library
+from bess_valuation.library import (VertexLibrary, library_path, library_stats, load_or_create,
+                                    save_library)
 from bess_valuation.lsmc import BackwardResult, EngineSettings, _features, backward_induction
 from bess_valuation.prices import PriceScenarios
 
@@ -46,10 +47,11 @@ class Result:
         intrinsic_soc_index: Grid index of the intrinsic SoC per day boundary, shape (D+1,).
         pf_value: Perfect-foresight value per out-of-sample path [€], shape (N,).
         pf_cash: Perfect-foresight daily cashflow [€], shape (N, D).
-        library: The vertex library used (not written to disk with the result).
+        library: The vertex library used (None with the DP solver; not written to disk).
         library_stats: Output of :func:`bess_valuation.library.library_stats`.
         runtimes: Wall-clock seconds per step.
         run_dir: Output folder after :meth:`save`.
+        daily_solver: Daily solver actually used.
     """
 
     config: BatteryConfig
@@ -67,10 +69,11 @@ class Result:
     intrinsic_soc_index: np.ndarray
     pf_value: np.ndarray
     pf_cash: np.ndarray
-    library: VertexLibrary
+    library: VertexLibrary | None
     library_stats: dict[str, Any]
     runtimes: dict[str, float] = field(default_factory=dict)
     run_dir: Path | None = None
+    daily_solver: str = "dp"
 
     @property
     def value_in_sample(self) -> float:
@@ -115,12 +118,13 @@ class Result:
             "regression_r2_mean": float(np.nanmean(bw.r2)) if np.isfinite(bw.r2).any() else float("nan"),
             "control_variate_variance_ratio_mean": float(np.mean(bw.var_ratio[:-1])) if bw.var_ratio.shape[0] > 1 else 1.0,
             "concavity_violation_share_mean": float(bw.violation_share.mean()),
-            "library_vertices": lib["vertices"],
-            "library_queries": lib["queries"],
-            "library_certified_share": lib["certified_share"],
-            "library_good_turing": lib["good_turing"],
-            "library_simplex_solves": lib["simplex"],
-            "library_case_splits": lib["case_split"],
+            "daily_solver": self.daily_solver,
+            "library_vertices": lib.get("vertices", 0),
+            "library_queries": lib.get("queries", 0),
+            "library_certified_share": lib.get("certified_share", float("nan")),
+            "library_good_turing": lib.get("good_turing", float("nan")),
+            "library_simplex_solves": lib.get("simplex", 0),
+            "library_case_splits": lib.get("case_split", 0),
             **{f"runtime_{k}_s": v for k, v in self.runtimes.items()},
         }
 
@@ -147,7 +151,8 @@ class Result:
             writer.writerow(["metric", "value"])
             writer.writerows(summary.items())
         self.paths_frame().to_parquet(run_dir / "paths.parquet", index=False)
-        _write_json(run_dir / "library_stats.json", self.library_stats)
+        if self.library_stats:
+            _write_json(run_dir / "library_stats.json", self.library_stats)
         if plots:
             from bess_valuation.plots import plot_results
 
@@ -189,10 +194,12 @@ def _json_default(obj: Any) -> Any:
     return str(obj)
 
 
-def cached_daily_values(cache_dir: str | Path | None, library: VertexLibrary, config: BatteryConfig,
-                        prices: np.ndarray, grid: np.ndarray, desc: str, seed: int = 0,
-                        progress: Callable[[float], None] | None = None) -> np.ndarray:
-    """:func:`daily_values` with a file cache keyed by battery physics, SoC grid and prices.
+def cached_daily_values(cache_dir: str | Path | None, library: VertexLibrary | None,
+                        config: BatteryConfig, prices: np.ndarray, grid: np.ndarray, desc: str,
+                        seed: int = 0, progress: Callable[[float], None] | None = None,
+                        solver: str = "library") -> np.ndarray:
+    """Daily values (:func:`daily_value_table`) with a file cache keyed by battery physics,
+    SoC grid and prices (not by the solver: all solvers give the same values).
 
     The key is a SHA-256 over the config hash (physical parameters only), the grid, the
     zero cycle cost and the raw price array, so a cached table is only reused for
@@ -200,19 +207,24 @@ def cached_daily_values(cache_dir: str | Path | None, library: VertexLibrary, co
 
     Args:
         cache_dir: Cache folder (None: always compute).
-        library: Vertex library used on a cache miss.
+        library: Vertex library (solver "library" only).
         config: Battery parameters.
         prices: Prices [€/MWh], shape (N, D, T).
         grid: SoC grid [MWh].
         desc: Progress-bar label.
         seed: Library processing order.
         progress: Optional callback with the finished fraction (0..1).
+        solver: Daily solver (see :func:`bess_valuation.daily.daily_value_table`).
 
     Returns:
         Daily values [€], shape (N, D, G, G).
     """
+    def compute() -> np.ndarray:
+        return daily_value_table(solver, config, prices, grid, library=library, desc=desc, seed=seed,
+                                 progress=progress)
+
     if cache_dir is None:
-        return daily_values(library, prices, grid, desc=desc, seed=seed, progress=progress)
+        return compute()
     h = hashlib.sha256()
     h.update(config.config_hash.encode())
     h.update(np.ascontiguousarray(grid, dtype=np.float64).tobytes())
@@ -225,7 +237,7 @@ def cached_daily_values(cache_dir: str | Path | None, library: VertexLibrary, co
         if progress is not None:
             progress(1.0)
         return np.load(path)
-    F = daily_values(library, prices, grid, desc=desc, seed=seed, progress=progress)
+    F = compute()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp.npy")
     np.save(tmp, F)
@@ -296,7 +308,16 @@ def run_engine(config: BatteryConfig, prices: PriceScenarios,
     reg, oos = prices.split(n_reg)
     logger.info("run %s: %d regression + %d out-of-sample paths, %d days, T = %d, grid %d",
                 config.name, reg.n_paths, oos.n_paths, prices.n_days, prices.periods_per_day, grid.size)
-    library = load_or_create(settings.library_dir, config, "full", settings.max_vertices)
+    solver = settings.daily_solver
+    if solver == "dp" and config.allow_simultaneous_charge_discharge:
+        logger.warning("daily solver 'dp' needs c_t d_t = 0; using 'library' instead")
+        solver = "library"
+    library = None
+    if solver == "library":
+        library = load_or_create(settings.library_dir, config, "full", settings.max_vertices)
+    elif solver != "dp":
+        library = VertexLibrary.empty(config, "full", settings.max_vertices)  # schedules only
+    logger.info("daily solver: %s", solver)
 
     feats_reg = _features(reg.da, reg.X, settings.features)
     feats_oos = _features(oos.da, oos.X, settings.features)
@@ -313,14 +334,14 @@ def run_engine(config: BatteryConfig, prices: PriceScenarios,
     if use_cv:
         F_mu = cached_daily_values(settings.value_cache_dir, library, config, prices.conditional_mean,
                                    grid, "F(mu)", settings.seed,
-                                   stage("daily values (conditional means)"))
+                                   stage("daily values (conditional means)"), solver)
         F_mu_reg, F_mu_oos = F_mu[:n_reg], F_mu[n_reg:]
-        runtimes["library_conditional_mean"] = time.perf_counter() - t0
+        runtimes["daily_values_conditional_mean"] = time.perf_counter() - t0
     t0 = time.perf_counter()
     F_all = cached_daily_values(settings.value_cache_dir, library, config, prices.da, grid, "F(p)",
-                                settings.seed, stage("daily values (prices)"))
+                                settings.seed, stage("daily values (prices)"), solver)
     F_reg, F_oos = F_all[:n_reg], F_all[n_reg:]
-    runtimes["library_prices"] = time.perf_counter() - t0
+    runtimes["daily_values_prices"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
     backward = backward_induction(F_reg, feats_reg, grid, config.terminal_soc_value, settings, F_mu_reg,
@@ -331,13 +352,14 @@ def run_engine(config: BatteryConfig, prices: PriceScenarios,
     forward = forward_simulation(backward.model, F_oos, feats_oos, F_mu_oos, i0,
                                  settings.concave_projection, progress=stage("forward simulation"))
     attach_schedules(forward, library, oos.da, grid, config, seed=settings.seed,
-                     progress=stage("schedules"))
+                     progress=stage("schedules"), solver=solver)
     runtimes["forward_simulation"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
     done = stage("intrinsic and perfect foresight")
     mean_path = oos.da.astype(np.float64).mean(axis=0)
-    F_bar = daily_values(library, mean_path[None], grid, desc="F(mean price)", seed=settings.seed)
+    F_bar = daily_value_table(solver, config, mean_path[None], grid, library=library,
+                              desc="F(mean price)", seed=settings.seed)
     terminal = config.terminal_soc_value * grid
     iv, icash, iidx = grid_bellman(F_bar, i0, terminal)
     pf_value, pf_cash, _ = grid_bellman(F_oos, i0, terminal)
@@ -345,7 +367,7 @@ def run_engine(config: BatteryConfig, prices: PriceScenarios,
     if done is not None:
         done(1.0)
 
-    if settings.library_dir is not None:
+    if solver == "library" and settings.library_dir is not None:
         save_library(library, library_path(settings.library_dir, config, "full"))
     meta = {k: v for k, v in prices.meta.items() if k != "generator"}
     meta.update({"n_paths": prices.n_paths, "n_paths_regression": reg.n_paths,
@@ -356,7 +378,8 @@ def run_engine(config: BatteryConfig, prices: PriceScenarios,
                     dt=prices.dt, grid=grid, i0=i0, backward=backward, forward=forward,
                     da_oos=oos.da, intrinsic_value=float(iv[0]), intrinsic_cash=icash[0],
                     intrinsic_soc_index=iidx[0], pf_value=pf_value, pf_cash=pf_cash,
-                    library=library, library_stats=library_stats(library), runtimes=runtimes)
+                    library=library, library_stats=library_stats(library) if library else {},
+                    runtimes=runtimes, daily_solver=solver)
     s = result.summary()
     logger.info("values [EUR]: in-sample %.0f, out-of-sample %.0f +- %.0f, intrinsic %.0f, "
                 "perfect foresight %.0f", s["value_in_sample_eur"], s["value_oos_eur"],

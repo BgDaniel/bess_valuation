@@ -364,8 +364,10 @@ def plot_results(result, out_dir: Path, pdf: bool = False, theme: str = "light")
     previous = THEME
     apply_style(theme)
     try:
-        return [f(result, out_dir, pdf) for f in (plot_value_fan, plot_value_decomposition, plot_soc,
-                                                  plot_dispatch_profile, plot_continuation,
-                                                  plot_library)]
+        funcs = [plot_value_fan, plot_value_decomposition, plot_soc, plot_dispatch_profile,
+                 plot_continuation]
+        if result.library is not None and result.library.pairs:
+            funcs.append(plot_library)
+        return [f(result, out_dir, pdf) for f in funcs]
     finally:
         apply_style(previous)

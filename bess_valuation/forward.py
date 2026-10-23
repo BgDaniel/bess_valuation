@@ -24,7 +24,7 @@ import numpy as np
 from tqdm import tqdm
 
 from bess_valuation.config import BatteryConfig
-from bess_valuation.daily import daily_schedules
+from bess_valuation.daily import schedules_for
 from bess_valuation.library import VertexLibrary
 from bess_valuation.lsmc import RegressionModel, concave_projection, continuation
 
@@ -125,25 +125,26 @@ def grid_bellman(F: np.ndarray, i0: int, terminal: np.ndarray) -> tuple[np.ndarr
     return W[:, i0], cash, idx
 
 
-def attach_schedules(result: ForwardResult, library: VertexLibrary, prices: np.ndarray,
+def attach_schedules(result: ForwardResult, library: VertexLibrary | None, prices: np.ndarray,
                      grid: np.ndarray, config: BatteryConfig, seed: int = 0,
-                     progress: Callable[[float], None] | None = None) -> None:
+                     progress: Callable[[float], None] | None = None, solver: str = "library") -> None:
     """Fill charge, discharge, SoC per period and cycles of a forward result in place.
 
     Args:
         result: Forward result with SoC indices.
-        library: Vertex library (the schedules are looked up again per realised pair).
+        library: Vertex library (schedules looked up again per realised pair; unused for "dp").
         prices: DA prices [€/MWh], shape (N, D, T).
         grid: SoC grid [MWh].
         config: Battery parameters.
         seed: Library processing order.
         progress: Optional callback with the finished fraction (0..1).
+        solver: Daily solver; "dp" recovers the schedules by dynamic programming.
     """
     n_paths, n_days, n_t = prices.shape
     s_start = grid[result.soc_index[:, :-1]].ravel()
     s_end = grid[result.soc_index[:, 1:]].ravel()
-    revenue, c, d = daily_schedules(library, prices.reshape(-1, n_t), s_start, s_end, seed=seed,
-                                    progress=progress)
+    revenue, c, d = schedules_for(solver, config, library, prices.reshape(-1, n_t), s_start, s_end,
+                                  seed=seed, progress=progress)
     gap = np.max(np.abs(revenue - result.cash.ravel()), initial=0.0)
     if gap > 1e-6 * max(1.0, float(np.abs(result.cash).max(initial=0.0))):
         raise RuntimeError(f"schedule revenue differs from the daily value by {gap:.3g} EUR")

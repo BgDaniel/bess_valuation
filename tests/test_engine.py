@@ -112,9 +112,11 @@ class TestEngine(unittest.TestCase):
             run_dir = self.result.save(tmp, plots=True)
             self.assertEqual(run_dir.parent, Path(tmp) / CONFIG.name)
             for name in ("config.yaml", "prices_meta.json", "summary.json", "summary.csv",
-                         "paths.parquet", "library_stats.json"):
+                         "paths.parquet"):
                 self.assertTrue((run_dir / name).exists(), name)
-            self.assertEqual(len(list((run_dir / "figures").glob("*.png"))), 6)
+            # default solver "dp": no vertex library, hence no library stats / plot 12
+            self.assertFalse((run_dir / "library_stats.json").exists())
+            self.assertEqual(len(list((run_dir / "figures").glob("*.png"))), 5)
             frame = pd.read_parquet(run_dir / "paths.parquet")
             n_oos = self.prices.n_paths - self.prices.n_paths // 2
             self.assertEqual(len(frame), n_oos * self.prices.n_days)
@@ -139,13 +141,13 @@ class TestVariants(unittest.TestCase):
         p = prices(n_paths=20, n_days=10, seed=5)
         r = run_engine(CONFIG, p, dataclasses.replace(SETTINGS, control_variate=True))
         self.assertTrue(r.backward.model.control_variate)
-        self.assertIn("library_conditional_mean", r.runtimes)
+        self.assertIn("daily_values_conditional_mean", r.runtimes)
         self.assertTrue(np.all(r.pf_value >= r.forward.value - 1e-6))
 
     def test_value_cache(self):
         p = prices(n_paths=20, n_days=10, seed=8)
         with tempfile.TemporaryDirectory() as tmp:
-            settings = dataclasses.replace(SETTINGS, value_cache_dir=tmp)
+            settings = dataclasses.replace(SETTINGS, value_cache_dir=tmp, daily_solver="library")
             first = run_engine(CONFIG, p, settings)
             files = list(Path(tmp).glob("*.npy"))
             self.assertEqual(len(files), 1)
@@ -160,6 +162,23 @@ class TestVariants(unittest.TestCase):
             # non-physical changes (name, start SoC, terminal value) reuse it
             run_engine(dataclasses.replace(CONFIG, name="other", soc_init=0.5), p, settings)
             self.assertEqual(len(list(Path(tmp).glob("*.npy"))), 3)
+
+    def test_all_daily_solvers_agree(self):
+        p = prices(n_paths=8, n_days=6, seed=9)
+        results = {solver: run_engine(CONFIG, p, dataclasses.replace(SETTINGS, daily_solver=solver))
+                   for solver in ("dp", "library", "cold", "cluster")}
+        ref = results["dp"]
+        for solver, r in results.items():
+            with self.subTest(solver=solver):
+                self.assertEqual(r.daily_solver, solver)
+                np.testing.assert_allclose(r.pf_value, ref.pf_value, atol=1e-6)
+                np.testing.assert_allclose(r.forward.cash, ref.forward.cash, atol=1e-6)
+                np.testing.assert_array_equal(r.forward.soc_index, ref.forward.soc_index)
+                self.assertAlmostEqual(r.intrinsic_value, ref.intrinsic_value, delta=1e-6)
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = results["library"].save(tmp, plots=True)
+            self.assertTrue((run_dir / "library_stats.json").exists())
+            self.assertEqual(len(list((run_dir / "figures").glob("*.png"))), 6)
 
     def test_simultaneous_allowed_is_not_worse(self):
         p = prices(n_paths=20, n_days=10, seed=4)
@@ -176,6 +195,7 @@ class TestVariants(unittest.TestCase):
             cli_main(["--log-level", "WARNING", "run", "--config", str(Path(tmp) / "cfg.yaml"),
                       "--prices", str(Path(tmp) / "scen"), "--no-plots", "--library-dir",
                       str(Path(tmp) / "lib"), "--value-cache-dir", str(Path(tmp) / "cache"),
+                      "--daily-solver", "library",
                       "--results", str(Path(tmp) / "res")])
             runs = list((Path(tmp) / "res" / CONFIG.name).iterdir())
             self.assertEqual(len(runs), 1)

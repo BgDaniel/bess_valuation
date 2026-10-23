@@ -23,6 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--n-regression-paths", type=int, default=None,
                      help="paths for the regression (default: half); the rest are out-of-sample")
     run.add_argument("--degree", type=int, default=2, help="polynomial degree of the regression basis")
+    run.add_argument("--daily-solver", default="dp", choices=["dp", "library", "cold", "cluster"],
+                     help="how the daily values are computed (all exact; dp is fastest)")
     run.add_argument("--library-dir", default="library_cache",
                      help="folder of persisted vertex libraries ('none' to disable)")
     run.add_argument("--value-cache-dir", default="value_cache",
@@ -63,7 +65,8 @@ def main(argv: list[str] | None = None) -> None:
         cache_dir = None if args.value_cache_dir.lower() == "none" else args.value_cache_dir
         settings = EngineSettings(n_regression_paths=args.n_regression_paths, degree=args.degree,
                                   library_dir=library_dir, value_cache_dir=cache_dir,
-                                  control_variate=args.control_variate)
+                                  control_variate=args.control_variate,
+                                  daily_solver=args.daily_solver)
         result = run_engine(config, prices, settings)
         run_dir = result.save(args.results, plots=args.plots)
         logging.getLogger(__name__).info("run folder: %s", run_dir)

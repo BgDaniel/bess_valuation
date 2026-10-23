@@ -62,6 +62,12 @@ class EngineSettings:
             Off by default: on the synthetic scenarios it reduced the regression variance
             by a factor of only ~1.004 but cost about a quarter of the runtime.
         concave_projection: Project the continuation value onto concave functions of SoC.
+        daily_solver: How the daily values F are computed: "dp" (dynamic programming over
+            the SoC, default, ~200x faster than the simplex variants on quarter-hourly
+            prices), "library" (vertex library + warm-started simplex), "cold" (simplex
+            without warm start) or "cluster" (simplex warm-started from k-means centroids).
+            All give the same values. With simultaneous charge/discharge allowed, "dp"
+            falls back to "library".
         library_dir: Folder of the persisted vertex libraries (None: do not persist).
         value_cache_dir: Folder of cached daily-value tables F (None: no cache); a run
             on the same battery physics, SoC grid and price scenarios loads them instead
@@ -76,6 +82,7 @@ class EngineSettings:
     features: str = "auto"
     control_variate: bool = False
     concave_projection: bool = True
+    daily_solver: str = "dp"
     library_dir: str | None = "library_cache"
     value_cache_dir: str | None = "value_cache"
     max_vertices: int = 1000

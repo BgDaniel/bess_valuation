@@ -26,6 +26,12 @@ Full specification: [docs/SPEC.md](docs/SPEC.md). Read it before working on a mi
 - [ ] 5. Cycle limit (Lagrange + counter), plot 11
 - [ ] 6. Performance tuning, remaining plots, runtime report
 
+## Decisions
+
+- Daily solver default is the exact DP over SoC (`daily_solver="dp"`, ~200x faster than the
+  simplex variants on quarter-hourly prices, same values); "library", "cold" and "cluster"
+  stay selectable for comparison.
+
 ## Backlog (agreed with the user, not yet scheduled)
 
 - Battery degradation, monthly granularity (capacity fixed within a day, so the daily
@@ -33,6 +39,5 @@ Full specification: [docs/SPEC.md](docs/SPEC.md). Read it before working on a mi
   1. user-given constant degradation (e.g. capacity / efficiency path per month);
   2. cycle-dependent degradation (wear cost per discharged MWh and/or capacity loss
      driven by throughput).
-- Compare daily solvers on DA prices: library + warm-started simplex vs. cold simplex vs.
-  exact DP over SoC (one backward pass gives all start SoCs for a given end SoC).
-- Progress bar for the schedule lookup in the forward simulation; keep finished bars.
+- Re-run `examples/benchmark_daily_solvers.py` when the cycle limit (or a hard daily
+  limit) is added: then the ranking of the daily solvers may change.
