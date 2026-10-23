@@ -37,6 +37,11 @@ Model for path n, day d and period t (hour of day h_t = (t + 1/2) dt):
   quarter :math:`k \in \{0,1,2,3\}` within the hour and :math:`R(h) = +1` on ramp-up hours,
   :math:`-1` on ramp-down hours, 0 otherwise: a within-hour sawtooth.
 
+Optionally (``negative_price_floor`` F) negative DA prices are damped by the soft floor
+:math:`p \mapsto -F(1 - e^{p/F})` (curtailment); the closed-form conditional mean below
+ignores the floor, so with a floor it is an approximation (used only by the optional
+control variate).
+
 IDA prices are DA plus successive forecast-update shocks,
 :math:`p^{IDA_j} = p^{DA} + \sum_{i\le j}\varepsilon^{(i)}` with
 :math:`\varepsilon^{(i)}_{d,t} = \beta_i + \sigma^{sol}_i\xi^{sol}_{d,i} S_{solar}(t,d) +
@@ -129,11 +134,15 @@ class PriceGeneratorConfig:
     ida_noise_sigma: tuple[float, float, float] = (3.0, 4.0, 6.0)
     # calendar: "YYYY-MM-DD" (one date) or "MM-DD" (every year)
     holidays: tuple[str, ...] = field(default=DEFAULT_HOLIDAYS)
+    # soft floor for negative DA prices (curtailment); None: no floor
+    negative_price_floor: float | None = None
 
     def __post_init__(self) -> None:
         for name in ("level_ar_phi", "peak_ar_phi", "solar_ar_phi", "noise_phi_hour"):
             if not 0.0 <= getattr(self, name) < 1.0:
                 raise ValueError(f"{name} must be in [0, 1)")
+        if self.negative_price_floor is not None and self.negative_price_floor <= 0.0:
+            raise ValueError("negative_price_floor must be positive (the floor is at minus this value)")
         if not -1.0 <= self.peak_level_corr <= 1.0:
             raise ValueError("peak_level_corr must be in [-1, 1]")
         for name in ("ida_bias", "ida_solar_sigma", "ida_level_sigma", "ida_noise_sigma"):
@@ -368,6 +377,18 @@ def _slice_calendar(cal: Calendar, lo: int, hi: int) -> Calendar:
 # ----------------------------------------------------------------------- generation
 
 
+def soft_floor(prices: np.ndarray, floor: float) -> np.ndarray:
+    r"""Soft floor for negative prices: :math:`p \mapsto -F(1 - e^{p/F})` for :math:`p < 0`.
+
+    Continuous with slope 1 at 0 and bounded below by :math:`-F` [€/MWh]: deeply negative
+    prices are damped as renewables curtail. Positive prices are unchanged.
+    """
+    out = prices.copy()
+    neg = prices < 0.0
+    out[neg] = -floor * (1.0 - np.exp(prices[neg] / floor))
+    return out
+
+
 def _add_spikes(J: np.ndarray, rate: np.ndarray, mean: float, hours: tuple[int, ...], sign: float,
                 dt: float, rng: np.random.Generator) -> None:
     """Add Poisson numbers of one-hour jumps (exponential sizes) to J in place."""
@@ -438,6 +459,8 @@ def generate_prices(cfg: PriceGeneratorConfig, n_paths: int, start: str, n_days:
                     cfg.spike_neg_hours, -1.0, dt, rng)
         da = (L[..., None] + A[..., None] * s_peak[None] - B[..., None] * s_solar[None]
               + Z + J + q[None, None, :])
+        if cfg.negative_price_floor is not None:
+            da = soft_floor(da, cfg.negative_price_floor)
         out["da"][lo:hi] = da
         spread = np.zeros_like(da)
         for j, name in enumerate(("ida1", "ida2", "ida3")):

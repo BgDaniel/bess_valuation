@@ -1,5 +1,6 @@
 """Tests for the synthetic price generator and the price containers."""
 
+import dataclasses
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from bess_valuation import PriceGeneratorConfig, PriceScenarios, generate_prices
-from bess_valuation.price_generator import make_calendar, plot_generator
+from bess_valuation.price_generator import make_calendar, plot_generator, soft_floor
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "prices_synthetic.yaml"
 
@@ -29,6 +30,17 @@ class TestGenerator(unittest.TestCase):
         self.assertEqual(p.X.shape, (400, 365, 3))
         self.assertEqual(p.conditional_mean.shape, (400, 365, 96))
 
+    def test_soft_price_floor(self):
+        x = np.linspace(-1000.0, 300.0, 1301)
+        y = soft_floor(x, 150.0)
+        self.assertTrue(np.all(y > -150.0))
+        np.testing.assert_array_equal(y[x >= 0], x[x >= 0])
+        self.assertTrue(np.all(np.diff(y) > 0))  # monotone
+        self.assertAlmostEqual(soft_floor(np.array([-1.0]), 150.0)[0], -1.0, delta=0.01)
+        self.assertGreater(self.prices.da.min(), -150.0)
+        with self.assertRaises(ValueError):
+            dataclasses.replace(self.cfg, negative_price_floor=-5.0)
+
     def test_hourly_resolution(self):
         p = generate_prices(self.cfg, n_paths=5, start="2027-01-01", n_days=3, dt=1.0, seed=1)
         self.assertEqual(p.da.shape, (5, 3, 24))
@@ -43,8 +55,13 @@ class TestGenerator(unittest.TestCase):
         self.assertFalse(np.allclose(a.da, c.da))
 
     def test_conditional_mean_matches_monte_carlo(self):
-        """Residuals p_{d+1} - mu(X_d) have zero mean and are uncorrelated with X_d."""
-        p = self.prices
+        """Residuals p_{d+1} - mu(X_d) have zero mean and are uncorrelated with X_d.
+
+        The closed form is exact without the soft price floor (the floor is nonlinear and
+        the closed form ignores it), so it is checked on the configuration without floor.
+        """
+        cfg = dataclasses.replace(self.cfg, negative_price_floor=None)
+        p = generate_prices(cfg, n_paths=400, start="2027-01-01", n_days=365, dt=0.25, seed=42)
         resid = p.da[:, 1:].astype(np.float64) - p.conditional_mean[:, :-1]
         daily = resid.mean(axis=2)  # (N, D-1)
         n = daily.size

@@ -1,19 +1,24 @@
-# Synthetic price generator (SPEC 2.3). Plausible defaults to be tuned, not a calibration.
-# Prices in EUR/MWh, hours in h. Missing keys fall back to the defaults in
-# bess_valuation.price_generator.PriceGeneratorConfig.
+# Synthetic price generator (SPEC 2.3), calibrated to German day-ahead statistics 2024
+# (hourly averages, 200 paths x 365 days): mean 79.5 EUR/MWh (2024: 78.5), negative hours
+# 5.3 % (2024: 457 of 8784 h = 5.2 %), hours above 100 EUR/MWh 31.7 % (2024: 26 %, 2023: 47 %),
+# mean daily max-min spread 128 EUR/MWh (2024/25: ~125-130), extremes -141 / 1133 EUR/MWh
+# (2024: -135 / 936). A 1 MW / 2 MWh battery earns ~87 kEUR per year on DA with ~21 %
+# extrinsic value. Sources: SMARD (Bundesnetzagentur), pv magazine, Electricity Maps,
+# Modo Energy, KYOS (see the app / report). Prices in EUR/MWh, hours in h; missing keys fall
+# back to the defaults in bess_valuation.price_generator.PriceGeneratorConfig.
 
 # daily level L_d: seasonal mean (higher in winter), calendar offsets, AR(1) deviation
 level_mean: 85.0
-level_seasonal_amplitude: 15.0
+level_seasonal_amplitude: 8.0
 weekend_offset: -12.0
 holiday_offset: -15.0
 level_ar_phi: 0.8
-level_ar_sigma: 10.0
+level_ar_sigma: 15.0
 
 # peak factor A_d and peak template (morning + evening hump)
-peak_mean: 30.0
+peak_mean: 36.0
 peak_ar_phi: 0.6
-peak_ar_sigma: 6.0
+peak_ar_sigma: 12.0
 peak_level_corr: 0.5
 weekend_peak_damping: 0.6
 peak_morning_hour: 8.0
@@ -24,22 +29,22 @@ peak_evening_hour_summer: 20.5
 peak_evening_width: 2.0
 
 # solar factor B_d (log-normal AR(1), seasonal mean) and midday template
-solar_mean_winter: 12.0
-solar_mean_summer: 60.0
+solar_mean_winter: 21.0
+solar_mean_summer: 85.0
 solar_ar_phi: 0.5
-solar_log_sigma: 0.4
+solar_log_sigma: 0.5
 solar_noon: 13.0
 solar_width_winter: 1.6
 solar_width_summer: 3.0
 
 # intraday AR(1) noise
-noise_phi_hour: 0.7
-noise_sigma: 4.0
+noise_phi_hour: 0.92
+noise_sigma: 16.0
 
 # spikes: positive evening jumps, negative midday jumps on weekends / holidays
-spike_pos_rate: 0.08
-spike_pos_mean: 120.0
-spike_pos_hours: [17, 18, 19, 20]
+spike_pos_rate: 0.5
+spike_pos_mean: 100.0
+spike_pos_hours: [7, 8, 17, 18, 19, 20]
 spike_neg_rate: 0.15
 spike_neg_mean: 50.0
 spike_neg_hours: [11, 12, 13, 14]
@@ -66,3 +71,6 @@ holidays:
   - "2027-03-29"
   - "2027-05-06"
   - "2027-05-17"
+
+# soft floor for negative DA prices (curtailment), asymptote -150 EUR/MWh
+negative_price_floor: 150.0
