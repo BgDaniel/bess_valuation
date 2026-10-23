@@ -11,7 +11,7 @@ r"""Forward simulation, intrinsic value and perfect-foresight bound.
   upper bound for every policy that ends each day on the SoC grid.
 
 Cycles are full equivalent cycles per day: discharged energy on the battery side divided
-by the usable capacity, :math:`\sum_t (d_t/\eta_d) / (e_{max} - e_{min})`.
+by the usable capacity of that day, :math:`\sum_t (d_t/\eta_d) / (\kappa_d (e_{max} - e_{min}))`.
 """
 
 from __future__ import annotations
@@ -125,33 +125,52 @@ def grid_bellman(F: np.ndarray, i0: int, terminal: np.ndarray) -> tuple[np.ndarr
     return W[:, i0], cash, idx
 
 
-def attach_schedules(result: ForwardResult, library: VertexLibrary | None, prices: np.ndarray,
-                     grid: np.ndarray, config: BatteryConfig, seed: int = 0,
-                     progress: Callable[[float], None] | None = None, solver: str = "library") -> None:
+def attach_schedules(result: ForwardResult, libraries: dict[float, VertexLibrary], prices: np.ndarray,
+                     grid_days: np.ndarray, kappa: np.ndarray, config: BatteryConfig, seed: int = 0,
+                     progress: Callable[[float], None] | None = None, solver: str = "library",
+                     cycle_cost: float = 0.0) -> None:
     """Fill charge, discharge, SoC per period and cycles of a forward result in place.
 
     Args:
-        result: Forward result with SoC indices.
-        library: Vertex library (schedules looked up again per realised pair; unused for "dp").
+        result: Forward result with SoC grid indices.
+        libraries: Vertex library per capacity factor (unused for "dp"; created if missing).
         prices: DA prices [€/MWh], shape (N, D, T).
-        grid: SoC grid [MWh].
-        config: Battery parameters.
+        grid_days: SoC grid [MWh] per day, shape (D, G).
+        kappa: Capacity factor per day, shape (D,).
+        config: Battery parameters (full capacity).
         seed: Library processing order.
         progress: Optional callback with the finished fraction (0..1).
         solver: Daily solver; "dp" recovers the schedules by dynamic programming.
+        cycle_cost: Cost per discharged MWh [€/MWh] (wear cost).
     """
+    from bess_valuation.degradation import capacity_groups, day_config
+
     n_paths, n_days, n_t = prices.shape
-    s_start = grid[result.soc_index[:, :-1]].ravel()
-    s_end = grid[result.soc_index[:, 1:]].ravel()
-    revenue, c, d = schedules_for(solver, config, library, prices.reshape(-1, n_t), s_start, s_end,
-                                  seed=seed, progress=progress)
-    gap = np.max(np.abs(revenue - result.cash.ravel()), initial=0.0)
+    days = np.arange(n_days)
+    s_start = grid_days[days[None, :], result.soc_index[:, :-1]]
+    s_end = grid_days[days[None, :], result.soc_index[:, 1:]]
+    c = np.empty((n_paths, n_days, n_t))
+    d = np.empty((n_paths, n_days, n_t))
+    revenue = np.empty((n_paths, n_days))
+    groups = capacity_groups(kappa)
+    for g_idx, (k, sel) in enumerate(groups):
+        cfg = day_config(config, k)
+        if solver != "dp" and k not in libraries:
+            libraries[k] = VertexLibrary.empty(cfg)
+        rev, cc, dd = schedules_for(solver, cfg, libraries.get(k), prices[:, sel].reshape(-1, n_t),
+                                    s_start[:, sel].ravel(), s_end[:, sel].ravel(), cycle_cost, seed=seed)
+        revenue[:, sel] = rev.reshape(n_paths, sel.size)
+        c[:, sel] = cc.reshape(n_paths, sel.size, n_t)
+        d[:, sel] = dd.reshape(n_paths, sel.size, n_t)
+        if progress is not None:
+            progress((g_idx + 1) / len(groups))
+    gap = np.max(np.abs(revenue - result.cash), initial=0.0)
     if gap > 1e-6 * max(1.0, float(np.abs(result.cash).max(initial=0.0))):
         raise RuntimeError(f"schedule revenue differs from the daily value by {gap:.3g} EUR")
     delta = config.eta_charge * c - d / config.eta_discharge
-    soc = s_start[:, None] + np.cumsum(delta, axis=1)
-    result.charge = c.reshape(n_paths, n_days, n_t).astype(np.float32)
-    result.discharge = d.reshape(n_paths, n_days, n_t).astype(np.float32)
-    result.soc = soc.reshape(n_paths, n_days, n_t).astype(np.float32)
-    usable = config.e_max - config.e_min
-    result.cycles = (d / config.eta_discharge).sum(axis=1).reshape(n_paths, n_days) / usable
+    soc = s_start[..., None] + np.cumsum(delta, axis=-1)
+    result.charge = c.astype(np.float32)
+    result.discharge = d.astype(np.float32)
+    result.soc = soc.astype(np.float32)
+    usable = (config.e_max - config.e_min) * kappa[None, :]
+    result.cycles = (d / config.eta_discharge).sum(axis=-1) / usable

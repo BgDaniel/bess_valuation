@@ -54,6 +54,15 @@ table with progress and remaining time), *Ergebnis* (key figures, figures, downl
 `bess_valuation/catalog.py`). Runs are background jobs (`bess_valuation/jobs.py`, folders
 under `results/_jobs/`), so they keep running when the browser is closed.
 
+## Degradation
+
+* `capacity_fade_per_year` (battery config): linear loss of usable capacity, monthly steps;
+  or pass your own factor per day: `run_engine(config, prices, capacity_factor=f)` with
+  `f(dates) -> factors in (0, 1]` (or an array). The SoC grid is relative to the day's
+  capacity.
+* `wear_cost_per_mwh`: degradation cost per discharged MWh, charged in the daily
+  optimisation; values are reported net of it (`wear_cost_eur` in the summary).
+
 ## Status
 
 Milestones 1-3 done: prices and generator, polytope, Numba simplex, vertex library

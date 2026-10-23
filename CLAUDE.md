@@ -34,10 +34,10 @@ Full specification: [docs/SPEC.md](docs/SPEC.md). Read it before working on a mi
 
 ## Backlog (agreed with the user, not yet scheduled)
 
-- Battery degradation, monthly granularity (capacity fixed within a day, so the daily
-  problem stays 1-D in SoC):
-  1. user-given constant degradation (e.g. capacity / efficiency path per month);
-  2. cycle-dependent degradation (wear cost per discharged MWh and/or capacity loss
-     driven by throughput).
+- Degradation steps 1 and 2 are done (user capacity factor / `capacity_fade_per_year`,
+  `wear_cost_per_mwh`). Next: cycle limit; the user prefers cumulative charge/discharge
+  throughput as an additional state (more runtime), which would also allow a
+  throughput-dependent (deterministic) degradation function coupled to the cycle limit.
+- App: layout / configuration rework after the user has tried it locally.
 - Re-run `examples/benchmark_daily_solvers.py` when the cycle limit (or a hard daily
   limit) is added: then the ranking of the daily solvers may change.

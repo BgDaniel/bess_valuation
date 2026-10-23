@@ -88,7 +88,9 @@ def _battery_facts(c: BatteryConfig) -> str:
     return (f'<div class="facts"><b>{c.e_max - c.e_min:g} MWh</b> usable · <b>{c.p_charge_max:g}/'
             f'{c.p_discharge_max:g} MW</b> charge/discharge · η <b>{c.eta_charge:g}/{c.eta_discharge:g}</b><br>'
             f'{"15 min" if c.dt == 0.25 else "1 h"} · start SoC <b>{c.soc_init:g} MWh</b> · '
-            f'<b>{c.soc_grid_size}</b> SoC grid points</div>')
+            f'<b>{c.soc_grid_size}</b> SoC grid points<br>'
+            f'capacity fade <b>{100 * c.capacity_fade_per_year:g} %/yr</b> · wear cost '
+            f'<b>{c.wear_cost_per_mwh:g} €/MWh</b></div>')
 
 
 def _simulation_facts(s: SimulationSpec) -> str:
@@ -216,6 +218,7 @@ def batteries_page() -> None:
         "Charge [MW]": c.p_charge_max, "Discharge [MW]": c.p_discharge_max, "η charge": c.eta_charge,
         "η discharge": c.eta_discharge, "Resolution": "15 min" if c.dt == 0.25 else "1 h",
         "Start SoC [MWh]": c.soc_init, "SoC grid": c.soc_grid_size, "Terminal value [€/MWh]": c.terminal_soc_value,
+        "Fade [%/yr]": 100 * c.capacity_fade_per_year, "Wear cost [€/MWh]": c.wear_cost_per_mwh,
         "Simultaneous charge/discharge": c.allow_simultaneous_charge_discharge,
     } for c in batteries]), hide_index=True, width="stretch")
 
@@ -240,6 +243,11 @@ def batteries_page() -> None:
         grid = c2.number_input("SoC grid points", value=int(cfg.soc_grid_size), min_value=2, max_value=41)
         terminal = c3.number_input("Terminal value [€/MWh]", value=float(cfg.terminal_soc_value), step=10.0)
         simultaneous = c4.checkbox("Simultaneous charge/discharge", value=cfg.allow_simultaneous_charge_discharge)
+        fade = c1.number_input("Capacity fade [%/yr]", value=100 * float(cfg.capacity_fade_per_year), min_value=0.0,
+                               max_value=99.0, step=0.5,
+                               help="linear loss of usable capacity, applied in monthly steps")
+        wear = c2.number_input("Wear cost [€/MWh]", value=float(cfg.wear_cost_per_mwh), min_value=0.0, step=1.0,
+                               help="degradation cost per discharged MWh, charged in the optimisation")
         saved = st.form_submit_button("Save", type="primary", icon=":material/save:")
     if saved:
         try:
@@ -248,7 +256,8 @@ def batteries_page() -> None:
                                       eta_discharge=eta_d, dt=dt, soc_grid_size=int(grid),
                                       terminal_soc_value=terminal,
                                       allow_simultaneous_charge_discharge=simultaneous,
-                                      max_cycles_per_day_avg=None)
+                                      max_cycles_per_day_avg=None, capacity_fade_per_year=fade / 100.0,
+                                      wear_cost_per_mwh=wear)
             save_battery(new, CATALOG)
             if choice != names[0] and new.name != cfg.name:
                 delete_entry("batteries", cfg.name, CATALOG)

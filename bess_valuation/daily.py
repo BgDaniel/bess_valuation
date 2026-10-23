@@ -218,3 +218,54 @@ def schedules_for(solver: str, config: BatteryConfig, library: VertexLibrary, pr
             progress(1.0)
         return out
     return daily_schedules(library, prices, s_start, s_end, cycle_cost, seed=seed, progress=progress)
+
+
+def daily_value_table_by_capacity(solver: str, config: BatteryConfig, prices: np.ndarray,
+                                  kappa: np.ndarray, libraries: dict[float, VertexLibrary],
+                                  cycle_cost: float = 0.0, desc: str = "daily values", seed: int = 0,
+                                  n_clusters: int = 256,
+                                  progress: Callable[[float], None] | None = None) -> np.ndarray:
+    """F for every path, day and relative SoC grid pair with day-dependent capacity.
+
+    Days with the same capacity factor are solved together with the battery of that
+    capacity (:func:`bess_valuation.degradation.day_config`) on the SoC grid
+    ``e_min + f_j kappa_d (e_max - e_min)``.
+
+    Args:
+        solver: One of :data:`DAILY_SOLVERS`.
+        config: Battery parameters (full capacity).
+        prices: Prices [€/MWh], shape (N, D, T).
+        kappa: Capacity factor per day, shape (D,).
+        libraries: Vertex library per capacity factor (solver "library"); missing entries
+            are created empty and added.
+        cycle_cost: Cost per discharged MWh [€/MWh] (wear cost, Lagrange multiplier).
+        desc: Progress-bar label.
+        seed: Library processing order / k-means initialisation.
+        n_clusters: Number of centroids (solver "cluster").
+        progress: Optional callback with the finished fraction (0..1).
+
+    Returns:
+        Revenues [€], shape (N, D, G, G) with axes (start, end) on the relative grid.
+    """
+    from bess_valuation.degradation import capacity_groups, day_config, grid_fractions
+
+    fractions = grid_fractions(config)
+    usable = config.e_max - config.e_min
+    n_paths, n_days, _ = prices.shape
+    g = fractions.size
+    out = np.empty((n_paths, n_days, g, g))
+    done = 0
+    for k, days in capacity_groups(kappa):
+        cfg = day_config(config, k)
+        if solver == "library" and k not in libraries:
+            libraries[k] = VertexLibrary.empty(cfg)
+
+        def sub(fraction: float, d0: int = done, n: int = days.size) -> None:
+            progress((d0 + fraction * n) / n_days)
+
+        out[:, days] = daily_value_table(solver, cfg, prices[:, days], config.e_min + k * usable * fractions,
+                                         library=libraries.get(k), cycle_cost=cycle_cost, desc=desc,
+                                         seed=seed, n_clusters=n_clusters,
+                                         progress=sub if progress is not None else None)
+        done += days.size
+    return out

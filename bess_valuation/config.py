@@ -46,6 +46,11 @@ class BatteryConfig:
         cycle_method: "lagrange" (cycle cost lambda) or "counter" (extra state).
         allow_simultaneous_charge_discharge: Whether c_t > 0 and d_t > 0 may occur together.
         transaction_cost: Cost per traded MWh per auction [€/MWh].
+        capacity_fade_per_year: Linear loss of usable capacity per year (fraction, e.g. 0.02),
+            applied in monthly steps (:mod:`bess_valuation.degradation`); a user-given
+            capacity factor passed to ``run_engine`` overrides it.
+        wear_cost_per_mwh: Wear (degradation) cost per discharged MWh [€/MWh], charged in
+            the daily optimisation.
     """
 
     name: str
@@ -64,6 +69,8 @@ class BatteryConfig:
     cycle_method: Literal["lagrange", "counter"] = "lagrange"
     allow_simultaneous_charge_discharge: bool = False
     transaction_cost: float = 0.0
+    capacity_fade_per_year: float = 0.0
+    wear_cost_per_mwh: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.e_min < self.e_max:
@@ -83,6 +90,10 @@ class BatteryConfig:
             raise ValueError(f"unknown cycle_period {self.cycle_period!r}")
         if self.cycle_method not in ("lagrange", "counter"):
             raise ValueError(f"unknown cycle_method {self.cycle_method!r}")
+        if not 0.0 <= self.capacity_fade_per_year < 1.0:
+            raise ValueError("capacity_fade_per_year must be in [0, 1)")
+        if self.wear_cost_per_mwh < 0.0:
+            raise ValueError("wear_cost_per_mwh must be >= 0")
 
     @property
     def periods_per_day(self) -> int:

@@ -14,3 +14,5 @@ cycle_period: year
 cycle_method: lagrange
 allow_simultaneous_charge_discharge: false
 transaction_cost: 0.0   # EUR/MWh
+capacity_fade_per_year: 0.0  # e.g. 0.02 = 2 % usable capacity lost per year (monthly steps)
+wear_cost_per_mwh: 0.0   # EUR per discharged MWh

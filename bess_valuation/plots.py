@@ -220,12 +220,15 @@ def plot_soc(result, out_dir: Path, pdf: bool = False) -> Path:
     """Plot 4: end-of-day SoC fan over time and SoC heatmap (period of day x day, median)."""
     apply_style()
     fwd = result.forward
-    soc_end = result.grid[fwd.soc_index[:, 1:]]
+    soc_end = result.soc_mwh(fwd.soc_index[:, 1:])
     x = np.arange(soc_end.shape[1])
+    capacity = result.config.e_min + result.kappa * (result.config.e_max - result.config.e_min)
     fig, axes = plt.subplots(2, 1, figsize=(8, 7.5), gridspec_kw={"height_ratios": [1, 1.2]},
                              layout="constrained")
     ax = axes[0]
     fan(ax, x, soc_end)
+    if np.any(result.kappa != 1.0):
+        ax.plot(x, capacity, color=SERIES[1], lw=1.5, ls="--", label="usable capacity (degradation)")
     ax.set_ylabel("end-of-day SoC [MWh]")
     ax.set_ylim(result.config.e_min - 0.05, result.config.e_max + 0.05)
     _date_ticks(ax, result.dates)
@@ -383,13 +386,13 @@ def plot_continuation(result, out_dir: Path, pdf: bool = False) -> Path:
     for a, ax in enumerate(axes[0]):
         day = bw.curve_days[a]
         for s in range(bw.curve_samples_raw.shape[1]):
-            ax.plot(result.grid, bw.curve_samples_raw[a, s] / 1e3, color=BLUE_RAMP[1], lw=1,
+            ax.plot(result.grid_days[day], bw.curve_samples_raw[a, s] / 1e3, color=BLUE_RAMP[1], lw=1,
                     label="sample paths, raw" if s == 0 else None)
-            ax.plot(result.grid, bw.curve_samples_projected[a, s] / 1e3, color=BLUE_RAMP[3], lw=1,
+            ax.plot(result.grid_days[day], bw.curve_samples_projected[a, s] / 1e3, color=BLUE_RAMP[3], lw=1,
                     ls="--", label="sample paths, projected" if s == 0 else None)
-        ax.plot(result.grid, bw.curve_raw[a] / 1e3, color=SERIES[1], lw=2, marker="o", ms=4,
+        ax.plot(result.grid_days[day], bw.curve_raw[a] / 1e3, color=SERIES[1], lw=2, marker="o", ms=4,
                 label="mean, raw")
-        ax.plot(result.grid, bw.curve_projected[a] / 1e3, color=INK, lw=1.5, ls="--", label="mean, projected")
+        ax.plot(result.grid_days[day], bw.curve_projected[a] / 1e3, color=INK, lw=1.5, ls="--", label="mean, projected")
         ax.set_title(f"{result.dates[day]}: {100 * bw.violation_share[day]:.0f} % of paths projected",
                      fontsize=9)
         ax.set_xlabel("end-of-day SoC [MWh]")
