@@ -11,6 +11,8 @@ from pathlib import Path
 import numpy as np
 
 from bess_valuation import BatteryConfig, EngineSettings, PriceGeneratorConfig, generate_prices, run_engine
+from bess_valuation.catalog import (SimulationSpec, delete_entry, list_batteries, list_simulations,
+                                    save_battery, save_simulation, seed_defaults, slug)
 from bess_valuation.jobs import list_jobs, read_status, run_job, submit_job
 
 REPO = Path(__file__).resolve().parents[1]
@@ -88,6 +90,34 @@ class TestJobs(unittest.TestCase):
             self.assertEqual(status["state"], "done", (job_dir / "log.txt").read_text()[-2000:])
 
 
+class TestCatalog(unittest.TestCase):
+    def test_round_trip_and_delete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            seed_defaults(tmp, REPO / "configs")
+            self.assertEqual({b.name for b in list_batteries(tmp)}, {"bess_1mw_2mwh", "bess_1mw_8mwh"})
+            self.assertEqual(len(list_simulations(tmp)), 2)
+            save_battery(BATTERY, tmp)
+            self.assertIn(BATTERY, list_batteries(tmp))
+            sim = SimulationSpec(name="tiny run", n_paths=6, n_days=4, dt=1.0, seed=3)
+            save_simulation(sim, tmp)
+            self.assertIn(sim, list_simulations(tmp))
+            self.assertEqual(sim.n_regression_paths(), 3)
+            self.assertEqual(sim.prices_spec()["n_paths"], 6)
+            delete_entry("simulations", "tiny run", tmp)
+            self.assertNotIn(sim, list_simulations(tmp))
+            seed_defaults(tmp, REPO / "configs")  # does not refill a non-empty catalog
+            self.assertEqual(len(list_simulations(tmp)), 2)
+
+    def test_validation(self):
+        with self.assertRaises(ValueError):
+            SimulationSpec(name="x", source="folder")
+        with self.assertRaises(ValueError):
+            SimulationSpec(name="x", regression_share=1.0)
+        with self.assertRaises(ValueError):
+            slug("  ")
+        self.assertEqual(slug("my run/2"), "my_run_2")
+
+
 try:
     from streamlit.testing.v1 import AppTest
 except ImportError:  # optional dependency group "app"
@@ -101,6 +131,10 @@ class TestStreamlitApp(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.cwd = os.getcwd()
         os.chdir(cls.tmp.name)  # the app works relative to the current folder
+        seed_defaults("app_data", REPO / "configs")
+        save_simulation(SimulationSpec(name="tiny", n_paths=4, n_days=3, dt=0.25, seed=1,
+                                       generator_config=str(REPO / "configs" / "prices_synthetic.yaml")),
+                        "app_data")
         cls.job_dir = submit_job(tiny_spec("results"), Path("results") / "_jobs", start=False)
         run_job(cls.job_dir)
 
@@ -109,16 +143,51 @@ class TestStreamlitApp(unittest.TestCase):
         os.chdir(cls.cwd)
         cls.tmp.cleanup()
 
-    def test_runs_page(self):
+    def _page_test(self, page):
+        def script(app_dir, page_name):
+            import sys
+
+            sys.path.insert(0, app_dir)
+            import streamlit_app
+
+            getattr(streamlit_app, page_name)()
+
+        return AppTest.from_function(script, args=(str(REPO / "app"), page), default_timeout=60)
+
+    def test_runs_page_and_start(self):
         at = AppTest.from_file(str(REPO / "app" / "streamlit_app.py"), default_timeout=60)
         at.run()
         self.assertFalse(at.exception, at.exception)
-        self.assertEqual(at.title[0].value, "BESS Valuation")
-        self.assertTrue(any(b.label == "Berechnen" for b in at.button))
+        self.assertEqual(at.title[0].value, "Läufe")
         frame = at.dataframe[0].value
-        self.assertEqual(len(frame), 1)
         self.assertIn("fertig", frame["Status"].iloc[0])
         self.assertTrue(frame["Ergebnis"].iloc[0].endswith(self.job_dir.name))
+        # start a tiny run: 2 MWh battery (15 min) + "tiny" simulation
+        battery_box = next(b for b in at.selectbox if b.label == "Batterie")
+        sim_box = next(b for b in at.selectbox if b.label == "Simulation")
+        battery_box.select("bess_1mw_2mwh")
+        sim_box.select("tiny")
+        at.run()
+        next(b for b in at.button if b.label == "Berechnen").click()
+        at.run()
+        self.assertFalse(at.exception, at.exception)
+        jobs = [j for j in list_jobs(Path("results") / "_jobs") if j["id"] != self.job_dir.name]
+        self.assertEqual(len(jobs), 1)
+        os.waitpid(jobs[0]["pid"], 0)
+        status = read_status(jobs[0]["job_dir"])
+        self.assertEqual(status["state"], "done", Path(jobs[0]["job_dir"], "log.txt").read_text()[-2000:])
+        spec = json.loads((Path(jobs[0]["job_dir"]) / "job.json").read_text())
+        self.assertEqual(spec["simulation_name"], "tiny")
+        self.assertEqual(spec["settings"]["daily_solver"], "dp")
+
+    def test_master_data_pages(self):
+        for page, title in (("batteries_page", "Batterien"), ("simulations_page", "Simulationen")):
+            at = self._page_test(page)
+            at.run()
+            self.assertFalse(at.exception, at.exception)
+            self.assertEqual(at.title[0].value, title)
+            self.assertGreaterEqual(len(at.dataframe[0].value), 2)
+            self.assertTrue(any(b.label == "Speichern" for b in at.button))
 
     def test_result_page(self):
         def script(app_dir):
@@ -134,7 +203,7 @@ class TestStreamlitApp(unittest.TestCase):
         at.run()
         self.assertFalse(at.exception, at.exception)
         self.assertEqual(at.title[0].value, "app_test")
-        self.assertEqual(len(at.metric), 5)
+        self.assertEqual(len(at.metric), 6)
         self.assertGreaterEqual(len(at.tabs), 5)
 
 if __name__ == "__main__":

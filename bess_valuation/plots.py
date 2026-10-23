@@ -283,8 +283,10 @@ def plot_dispatch_profile(result, out_dir: Path, pdf: bool = False) -> Path:
         hour_axis(ax_d)
     axes[0, 0].set_ylabel("DA price [€/MWh]")
     axes[1, 0].set_ylabel("power [MW]")
-    axes[0, 0].legend(loc="upper left", ncol=3)
-    axes[1, 0].legend(loc="lower left", fontsize=7)
+    filled = [col for col, m in enumerate(SEASONS.values()) if np.isin(months, m).any()]
+    if filled:
+        axes[0, filled[0]].legend(loc="upper left", ncol=3)
+        axes[1, filled[0]].legend(loc="lower left", fontsize=7)
     fig.suptitle(f"Plot 5 - dispatch profile vs DA prices by season, {result.config.name}",
                  fontsize=10, fontweight="bold")
     return save_figure(fig, out_dir, "05_dispatch_profile", pdf)

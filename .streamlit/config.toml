@@ -1,13 +1,39 @@
-# Dark, black-blue theme of the BESS valuation app (see app/streamlit_app.py).
+# Dark black-blue theme of the BESS valuation app (app/streamlit_app.py).
+# Layered surfaces: page #0b0f17 (near black, not pure black), sidebar #0e1420,
+# cards / inputs #141c2b, borders #1e2633; light-grey text; one accent blue used sparingly.
+# Chart colours: the categorical palette's dark steps, validated against the dark surface.
 [theme]
 base = "dark"
 primaryColor = "#3987e5"
 backgroundColor = "#0b0f17"
-secondaryBackgroundColor = "#121a27"
+secondaryBackgroundColor = "#141c2b"
 textColor = "#e6e9ef"
+linkColor = "#6da7ec"
+linkUnderline = false
 borderColor = "#1e2633"
-baseRadius = "6px"
-font = "sans serif"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "8px"
+buttonRadius = "6px"
+baseFontSize = 14
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+headingFontWeights = 600
+codeFont = "JetBrains Mono:https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap, monospace"
+dataframeHeaderBackgroundColor = "#121a27"
+dataframeBorderColor = "#1e2633"
+blueColor = "#3987e5"
+greenColor = "#199e70"
+redColor = "#e66767"
+orangeColor = "#d95926"
+chartCategoricalColors = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"]
+
+[theme.sidebar]
+backgroundColor = "#0e1420"
+secondaryBackgroundColor = "#141c2b"
+
+[client]
+toolbarMode = "viewer"
 
 [browser]
 gatherUsageStats = false

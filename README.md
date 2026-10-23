@@ -48,8 +48,11 @@ poetry install --with app
 poetry run streamlit run app/streamlit_app.py
 ```
 
-Runs are started as background jobs (`bess_valuation/jobs.py`, folders under
-`results/_jobs/`), so they keep running when the browser is closed.
+Pages: *Läufe* (pick a stored battery and simulation set, numerical settings, start; live
+table with progress and remaining time), *Ergebnis* (key figures, figures, downloads),
+*Batterien* and *Simulationen* (stored master data, `app_data/`, see
+`bess_valuation/catalog.py`). Runs are background jobs (`bess_valuation/jobs.py`, folders
+under `results/_jobs/`), so they keep running when the browser is closed.
 
 ## Status
 
