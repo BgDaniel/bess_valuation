@@ -31,6 +31,9 @@ Full specification: [docs/SPEC.md](docs/SPEC.md). Read it before working on a mi
 - Daily solver default is the exact DP over SoC (`daily_solver="dp"`, ~200x faster than the
   simplex variants on quarter-hourly prices, same values); "library", "cold" and "cluster"
   stay selectable for comparison.
+- Cycle definition (also for the coming cycle limit): full equivalent cycles as in
+  `forward.py`, i.e. discharged energy on the battery side (d / eta_discharge) divided by
+  the usable capacity of that day (kappa * (e_max - e_min)).
 
 ## Backlog (agreed with the user, not yet scheduled)
 
