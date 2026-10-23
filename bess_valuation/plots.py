@@ -18,6 +18,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
+from bess_valuation.units import Units  # noqa: E402
+
 # Colour tokens per theme. Categorical slots in fixed order (validated default palette:
 # light steps on the light surface, dark steps checked against the dark-blue surface).
 THEMES = {
@@ -48,6 +50,9 @@ INK_SECONDARY = THEMES["light"]["ink_secondary"]
 GRID = THEMES["light"]["grid"]
 
 DPI = 150
+
+# Display units of the valuation figures (set by plot_results).
+UNITS = Units()
 
 
 def apply_style(theme: str | None = None) -> None:
@@ -162,7 +167,7 @@ def plot_value_fan(result, out_dir: Path, pdf: bool = False) -> Path:
     ax.plot(x, np.cumsum(result.pf_cash, axis=1).mean(axis=0) / 1e3, color=SERIES[2], lw=2,
             label="perfect foresight (mean)")
     _date_ticks(ax, result.dates)
-    ax.set_ylabel("cumulative value [k€]")
+    ax.set_ylabel(f"cumulative value [k{UNITS.symbol}]")
     ax.set_title(f"Plot 1 - cumulative realised value, {result.config.name} (DA only)")
     ax.legend(loc="upper left")
     return save_figure(fig, out_dir, "01_value_fan", pdf)
@@ -194,7 +199,7 @@ def plot_value_decomposition(result, out_dir: Path, pdf: bool = False) -> Path:
            label="extrinsic (LSMC - intrinsic)", edgecolor=SURFACE, lw=1)
     ax.axhline(0, color=INK_SECONDARY, lw=0.8)
     ax.set_title("intrinsic vs extrinsic value per month")
-    ax.set_ylabel("value per month [k€]")
+    ax.set_ylabel(f"value per month [k{UNITS.symbol}]")
     ax.legend(loc="upper left")
     ax = axes[1]
     bottom = np.zeros(keys.size)
@@ -220,31 +225,32 @@ def plot_soc(result, out_dir: Path, pdf: bool = False) -> Path:
     """Plot 4: end-of-day SoC fan over time and SoC heatmap (period of day x day, median)."""
     apply_style()
     fwd = result.forward
-    soc_end = result.soc_mwh(fwd.soc_index[:, 1:])
+    soc_end = UNITS.energy_value(result.soc_mwh(fwd.soc_index[:, 1:]))
     x = np.arange(soc_end.shape[1])
-    capacity = result.config.e_min + result.kappa * (result.config.e_max - result.config.e_min)
+    capacity = UNITS.energy_value(result.config.e_min + result.kappa * (result.config.e_max - result.config.e_min))
     fig, axes = plt.subplots(2, 1, figsize=(8, 7.5), gridspec_kw={"height_ratios": [1, 1.2]},
                              layout="constrained")
     ax = axes[0]
     fan(ax, x, soc_end)
     if np.any(result.kappa != 1.0):
         ax.plot(x, capacity, color=SERIES[1], lw=1.5, ls="--", label="usable capacity (degradation)")
-    ax.set_ylabel("end-of-day SoC [MWh]")
-    ax.set_ylim(result.config.e_min - 0.05, result.config.e_max + 0.05)
+    ax.set_ylabel(f"end-of-day SoC [{UNITS.energy}]")
+    margin = 0.025 * (result.config.e_max - result.config.e_min)
+    ax.set_ylim(UNITS.energy_value(result.config.e_min - margin), UNITS.energy_value(result.config.e_max + margin))
     _date_ticks(ax, result.dates)
     ax.set_title("end-of-day SoC across out-of-sample paths")
     ax.legend(loc="lower left", bbox_to_anchor=(0.0, 1.08), ncol=3)
     ax = axes[1]
-    med = np.median(fwd.soc, axis=0).T  # (T, D)
+    med = UNITS.energy_value(np.median(fwd.soc, axis=0).T)  # (T, D)
     im = ax.imshow(med, aspect="auto", origin="lower", cmap=sequential_cmap(),
-                   extent=(-0.5, med.shape[1] - 0.5, 0, 24), vmin=result.config.e_min,
-                   vmax=result.config.e_max, interpolation="nearest")
+                   extent=(-0.5, med.shape[1] - 0.5, 0, 24), vmin=UNITS.energy_value(result.config.e_min),
+                   vmax=UNITS.energy_value(result.config.e_max), interpolation="nearest")
     ax.set_yticks(range(0, 25, 4))
     ax.set_ylabel("hour of day [h]")
     ax.grid(False)
     _date_ticks(ax, result.dates)
     ax.set_title("SoC at the end of each period, median over paths")
-    fig.colorbar(im, ax=ax, label="SoC [MWh]", pad=0.01)
+    fig.colorbar(im, ax=ax, label=f"SoC [{UNITS.energy}]", pad=0.01)
     fig.suptitle(f"Plot 4 - state of charge, {result.config.name}", fontsize=10, fontweight="bold")
     return save_figure(fig, out_dir, "04_soc", pdf)
 
@@ -267,9 +273,9 @@ def plot_dispatch_profile(result, out_dir: Path, pdf: bool = False) -> Path:
         days = np.isin(months, season_months)
         ax_p, ax_d = axes[0, col], axes[1, col]
         if days.any():
-            prices = result.da_oos[:, days].reshape(-1, n_t).astype(np.float64)
-            charge = fwd.charge[:, days].reshape(-1, n_t) / result.dt
-            discharge = fwd.discharge[:, days].reshape(-1, n_t) / result.dt
+            prices = UNITS.price_value(result.da_oos[:, days].reshape(-1, n_t).astype(np.float64))
+            charge = UNITS.power_value(fwd.charge[:, days].reshape(-1, n_t) / result.dt)
+            discharge = UNITS.power_value(fwd.discharge[:, days].reshape(-1, n_t) / result.dt)
             fan(ax_p, hours, prices, label="median DA price")
             ax_d.fill_between(hours, 0, discharge.mean(axis=0), color=SERIES[0], lw=0,
                               label="discharge, mean")
@@ -284,8 +290,8 @@ def plot_dispatch_profile(result, out_dir: Path, pdf: bool = False) -> Path:
         for ax in (ax_p, ax_d):
             ax.axhline(0, color=INK_SECONDARY, lw=0.8)
         hour_axis(ax_d)
-    axes[0, 0].set_ylabel("DA price [€/MWh]")
-    axes[1, 0].set_ylabel("power [MW]")
+    axes[0, 0].set_ylabel(f"DA price [{UNITS.price}]")
+    axes[1, 0].set_ylabel(f"power [{UNITS.power}]")
     filled = [col for col, m in enumerate(SEASONS.values()) if np.isin(months, m).any()]
     if filled:
         axes[0, filled[0]].legend(loc="upper left", ncol=3)
@@ -307,7 +313,7 @@ def plot_daily_cashflow(result, out_dir: Path, pdf: bool = False) -> Path:
     ax.plot(x, cash.mean(axis=0), color=INK, lw=1.0, label="LSMC mean")
     ax.plot(x, result.intrinsic_cash, color=SERIES[1], lw=1.2, label="intrinsic (mean prices)")
     ax.plot(x, result.pf_cash.mean(axis=0), color=SERIES[2], lw=1.0, label="perfect foresight (mean)")
-    ax.set_ylabel("daily cashflow [€]")
+    ax.set_ylabel(f"daily cashflow [{UNITS.symbol}]")
     ax.set_title("daily cashflow across out-of-sample paths")
     ax.legend(loc="upper left", ncol=3, fontsize=7)
     ax = axes[1]
@@ -318,7 +324,7 @@ def plot_daily_cashflow(result, out_dir: Path, pdf: bool = False) -> Path:
     ax.plot(x, extr, color=SERIES[0], lw=1.5, label="LSMC mean - intrinsic (extrinsic)")
     ax.plot(x, gap, color=SERIES[2], lw=1.5, label="perfect foresight - LSMC mean")
     ax.axhline(0, color=INK_SECONDARY, lw=0.8)
-    ax.set_ylabel("€ per day (7-day mean)")
+    ax.set_ylabel(f"{UNITS.symbol} per day (7-day mean)")
     ax.set_title("extrinsic value and gap to perfect foresight per day")
     ax.legend(loc="upper left", fontsize=7)
     _date_ticks(ax, result.dates)
@@ -363,7 +369,7 @@ def plot_regression(result, out_dir: Path, pdf: bool = False) -> Path:
         ax.text(k, v / 1e3, f"{v / 1e3:.1f}", ha="center", va="bottom", fontsize=8, color=INK)
     ax.set_xticks(np.arange(4))
     ax.set_xticklabels(labels, fontsize=8)
-    ax.set_ylabel("value [k€]")
+    ax.set_ylabel(f"value [k{UNITS.symbol}]")
     ax.set_ylim(0, max(values) / 1e3 * 1.12)
     ax.set_title("values (error bar: ±2 standard errors)")
     if has_cv:
@@ -386,18 +392,18 @@ def plot_continuation(result, out_dir: Path, pdf: bool = False) -> Path:
     for a, ax in enumerate(axes[0]):
         day = bw.curve_days[a]
         for s in range(bw.curve_samples_raw.shape[1]):
-            ax.plot(result.grid_days[day], bw.curve_samples_raw[a, s] / 1e3, color=BLUE_RAMP[1], lw=1,
+            ax.plot(UNITS.energy_value(result.grid_days[day]), bw.curve_samples_raw[a, s] / 1e3, color=BLUE_RAMP[1], lw=1,
                     label="sample paths, raw" if s == 0 else None)
-            ax.plot(result.grid_days[day], bw.curve_samples_projected[a, s] / 1e3, color=BLUE_RAMP[3], lw=1,
+            ax.plot(UNITS.energy_value(result.grid_days[day]), bw.curve_samples_projected[a, s] / 1e3, color=BLUE_RAMP[3], lw=1,
                     ls="--", label="sample paths, projected" if s == 0 else None)
-        ax.plot(result.grid_days[day], bw.curve_raw[a] / 1e3, color=SERIES[1], lw=2, marker="o", ms=4,
+        ax.plot(UNITS.energy_value(result.grid_days[day]), bw.curve_raw[a] / 1e3, color=SERIES[1], lw=2, marker="o", ms=4,
                 label="mean, raw")
-        ax.plot(result.grid_days[day], bw.curve_projected[a] / 1e3, color=INK, lw=1.5, ls="--", label="mean, projected")
+        ax.plot(UNITS.energy_value(result.grid_days[day]), bw.curve_projected[a] / 1e3, color=INK, lw=1.5, ls="--", label="mean, projected")
         ax.set_title(f"{result.dates[day]}: {100 * bw.violation_share[day]:.0f} % of paths projected",
                      fontsize=9)
-        ax.set_xlabel("end-of-day SoC [MWh]")
+        ax.set_xlabel(f"end-of-day SoC [{UNITS.energy}]")
         if a == 0:
-            ax.set_ylabel("continuation value [k€]")
+            ax.set_ylabel(f"continuation value [k{UNITS.symbol}]")
     axes[0, 0].legend(loc="best", fontsize=7)
     fig.suptitle(f"Plot 9 - continuation value vs SoC (concavity check), {result.config.name}",
                  fontsize=10, fontweight="bold")
@@ -417,7 +423,7 @@ def plot_library(result, out_dir: Path, pdf: bool = False) -> Path:
         disc = np.array(lib.pairs[key].stats.discovery).reshape(-1, 2)
         if disc.size:
             ax.plot(disc[:, 0], disc[:, 1], color=SERIES[c], marker="o", ms=3,
-                    label=f"s {key[0]:g} -> {key[1]:g} MWh")
+                    label=f"s {UNITS.energy_value(key[0]):g} -> {UNITS.energy_value(key[1]):g} {UNITS.energy}")
     q = max(p["queries"] for p in stats)
     ax.plot([0, q], [0, q], color=GRID, lw=1, ls=":", label="every query new")
     ax.axhline(lib.max_vertices, color=INK_SECONDARY, lw=0.8, ls="--", label="cache cap")
@@ -437,7 +443,7 @@ def plot_library(result, out_dir: Path, pdf: bool = False) -> Path:
         hits = np.sort(lib.pairs[key].hits[:lib.pairs[key].size])[::-1]
         if hits.size:
             ax.loglog(np.arange(1, hits.size + 1), hits, color=SERIES[c], lw=1.5,
-                      label=f"s {key[0]:g} -> {key[1]:g} MWh")
+                      label=f"s {UNITS.energy_value(key[0]):g} -> {UNITS.energy_value(key[1]):g} {UNITS.energy}")
     ax.set_xlabel("vertex rank")
     ax.set_ylabel("hits")
     ax.set_title("hit frequency vs rank (cached vertices)")
@@ -469,17 +475,17 @@ def plot_convexity(result, out_dir: Path, pdf: bool = False) -> Path:
     n_t = c.mean_price.size
     hours = (np.arange(n_t) + 0.5) * 24.0 / n_t
     fig, axes = plt.subplots(2, k, figsize=(4.2 * k, 7), layout="constrained", squeeze=False)
-    pair_labels = [f"{a:g} -> {b:g} MWh" for a, b in c.pairs]
+    pair_labels = [f"{UNITS.energy_value(a):g} -> {UNITS.energy_value(b):g} {UNITS.energy}" for a, b in c.pairs]
     for i in range(k):
         ax = axes[0, i]
-        ax.plot(hours, c.mean_price, color=INK_SECONDARY, lw=1.2, label="mean curve")
-        ax.plot(hours, c.mean_price + c.sigma[i] * c.directions[i], color=SERIES[0], lw=1.4,
-                label="+1 σ along the direction")
-        ax.plot(hours, c.mean_price - c.sigma[i] * c.directions[i], color=SERIES[1], lw=1.4,
-                label="-1 σ along the direction")
+        mean = UNITS.price_value(c.mean_price)
+        shift = UNITS.price_value(c.sigma[i] * c.directions[i])
+        ax.plot(hours, mean, color=INK_SECONDARY, lw=1.2, label="mean curve")
+        ax.plot(hours, mean + shift, color=SERIES[0], lw=1.4, label="+1 σ along the direction")
+        ax.plot(hours, mean - shift, color=SERIES[1], lw=1.4, label="-1 σ along the direction")
         ax.set_title(f"direction {i + 1}: {100 * c.explained[i]:.0f} % of the price variance")
         hour_axis(ax)
-        ax.set_ylabel("price [€/MWh]")
+        ax.set_ylabel(f"price [{UNITS.price}]")
         ax = axes[1, i]
         for j, label in enumerate(pair_labels):
             ax.plot(c.t, c.values[i, :, j], color=SERIES[j], lw=1.6, marker="o", ms=2.5, label=label)
@@ -489,7 +495,7 @@ def plot_convexity(result, out_dir: Path, pdf: bool = False) -> Path:
         ok = bool(np.all(c.min_second_difference[i] >= -c.tolerance))
         ax.set_title(f"revenue along direction {i + 1}: {'convex ✓' if ok else 'NOT convex ✗'}")
         ax.set_xlabel("t [multiples of σ]")
-        ax.set_ylabel("daily revenue [€]")
+        ax.set_ylabel(f"daily revenue [{UNITS.symbol}]")
     axes[0, 0].legend(loc="upper left", fontsize=7)
     axes[1, 0].legend(loc="best", fontsize=7)
     fig.suptitle(f"Convexity of the daily revenue along the principal price factors, {c.date}, "
@@ -497,10 +503,13 @@ def plot_convexity(result, out_dir: Path, pdf: bool = False) -> Path:
     return save_figure(fig, out_dir, "15_convexity", pdf)
 
 
-def plot_results(result, out_dir: Path, pdf: bool = False, theme: str = "light") -> list[Path]:
-    """Write all valuation figures implemented so far in the given theme; returns their paths."""
-    previous = THEME
+def plot_results(result, out_dir: Path, pdf: bool = False, theme: str = "light",
+                 units: Units | None = None) -> list[Path]:
+    """Write all valuation figures in the given theme and display units; returns their paths."""
+    global UNITS
+    previous, previous_units = THEME, UNITS
     apply_style(theme)
+    UNITS = units or Units()
     try:
         funcs = [plot_value_fan, plot_value_decomposition, plot_daily_cashflow, plot_soc,
                  plot_dispatch_profile, plot_continuation, plot_regression]
@@ -511,3 +520,4 @@ def plot_results(result, out_dir: Path, pdf: bool = False, theme: str = "light")
         return [f(result, out_dir, pdf) for f in funcs]
     finally:
         apply_style(previous)
+        UNITS = previous_units

@@ -58,7 +58,8 @@ def submit_job(spec: dict[str, Any], jobs_root: str | Path = DEFAULT_JOBS_ROOT,
         spec: ``{"battery": {...BatteryConfig fields}, "prices": {...}, "settings":
             {...EngineSettings fields}, "results_root": "results"}``. Prices are either
             ``{"source": "synthetic", "generator_config": path, "n_paths", "n_days",
-            "start", "seed"}`` or ``{"source": "folder", "folder": path}``.
+            "start", "seed"}`` or ``{"source": "folder", "folder": path}``. Optional
+            ``"units"``: display units ``{"currency", "energy"}`` for the figures.
         jobs_root: Folder holding all job folders.
         start: Start the worker process (False: only create the folder, e.g. in tests).
 
@@ -163,7 +164,10 @@ def run_job(job_dir: str | Path) -> dict[str, Any]:
         result = run_engine(config, prices, settings,
                             progress=lambda step, p: update(step=step, progress=p))
         update(force=True, step="saving results and figures", progress=0.999)
-        run_dir = result.save(spec.get("results_root", "results"), plots=True, dark_figures=True)
+        from bess_valuation.units import Units
+
+        run_dir = result.save(spec.get("results_root", "results"), plots=True, dark_figures=True,
+                              units=Units.from_dict(spec.get("units")))
         summary = result.summary()
         update(force=True, state="done", step="done", progress=1.0, finished=_now(),
                run_dir=str(run_dir), summary={k: summary[k] for k in SUMMARY_KEYS})

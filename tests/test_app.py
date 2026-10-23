@@ -12,8 +12,10 @@ import numpy as np
 
 from bess_valuation import BatteryConfig, EngineSettings, PriceGeneratorConfig, generate_prices, run_engine
 from bess_valuation.catalog import (SimulationSpec, delete_entry, list_batteries, list_simulations,
-                                    save_battery, save_simulation, seed_defaults, slug)
+                                    load_units, save_battery, save_simulation, save_units, seed_defaults,
+                                    slug)
 from bess_valuation.jobs import list_jobs, read_status, run_job, submit_job
+from bess_valuation.units import Units
 
 REPO = Path(__file__).resolve().parents[1]
 BATTERY = BatteryConfig(name="app_test", e_max=2.0, p_charge_max=1.0, p_discharge_max=1.0,
@@ -59,6 +61,16 @@ class TestJobs(unittest.TestCase):
             self.assertEqual(len(list((run_dir / "figures_dark").glob("*.png"))), n_fig)
             self.assertIn("value_oos_eur", stored["summary"])
             self.assertEqual([j["id"] for j in list_jobs(Path(tmp) / "jobs")], [job_dir.name])
+
+    def test_units_reach_the_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = dict(tiny_spec(Path(tmp) / "results"), units={"currency": "USD", "energy": "kWh"})
+            job_dir = submit_job(spec, Path(tmp) / "jobs", start=False)
+            run_job(job_dir)
+            status = read_status(job_dir)
+            self.assertEqual(status["state"], "done", status["error"])
+            meta = json.loads((Path(status["run_dir"]) / "prices_meta.json").read_text())
+            self.assertEqual(meta["display_units"], {"currency": "USD", "energy": "kWh"})
 
     def test_failed_job_reports_error(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -107,6 +119,12 @@ class TestCatalog(unittest.TestCase):
             self.assertNotIn(sim, list_simulations(tmp))
             seed_defaults(tmp, REPO / "configs")  # does not refill a non-empty catalog
             self.assertEqual(len(list_simulations(tmp)), 2)
+
+    def test_units_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(load_units(tmp), Units())
+            save_units(Units(currency="CHF", energy="kWh"), tmp)
+            self.assertEqual(load_units(tmp), Units(currency="CHF", energy="kWh"))
 
     def test_validation(self):
         with self.assertRaises(ValueError):
@@ -205,6 +223,42 @@ class TestStreamlitApp(unittest.TestCase):
         self.assertEqual(at.title[0].value, "app_test")
         self.assertEqual(len(at.metric), 6)
         self.assertGreaterEqual(len(at.tabs), 5)
+        self.assertIn("k€", at.metric[0].value)
+
+    def test_settings_and_kwh_battery_form(self):
+        at = self._page_test("settings_page")
+        at.run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertEqual(at.title[0].value, "Settings")
+        at.selectbox[0].select("USD")
+        at.radio[0].set_value("kWh")
+        next(b for b in at.button if b.label == "Save").click()
+        at.run()
+        try:
+            self.assertEqual(load_units("app_data"), Units(currency="USD", energy="kWh"))
+            at = self._page_test("batteries_page")
+            at.run()
+            self.assertFalse(at.exception, at.exception)
+            row = at.dataframe[0].value.set_index("Name").loc["bess_1mw_2mwh"]
+            self.assertAlmostEqual(row["Capacity [kWh]"], 2000.0)
+            self.assertAlmostEqual(row["Charge [kW]"], 1000.0)
+            # new battery entered in kWh / kW / $ per kWh is stored in MWh / MW / $ per MWh
+            next(n for n in at.text_input if n.label == "Name").set_value("kwh_battery")
+            next(n for n in at.number_input if n.label == "e_max [kWh]").set_value(500.0)
+            next(n for n in at.number_input if n.label == "Start SoC [kWh]").set_value(250.0)
+            next(n for n in at.number_input if n.label == "Charge power [kW]").set_value(250.0)
+            next(n for n in at.number_input if n.label == "Discharge power [kW]").set_value(250.0)
+            next(n for n in at.number_input if n.label == "Wear cost [$/kWh]").set_value(0.01)
+            next(b for b in at.button if b.label == "Save").click()
+            at.run()
+            self.assertFalse(at.exception, at.exception)
+            cfg = next(b for b in list_batteries("app_data") if b.name == "kwh_battery")
+            self.assertAlmostEqual(cfg.e_max, 0.5)
+            self.assertAlmostEqual(cfg.p_charge_max, 0.25)
+            self.assertAlmostEqual(cfg.wear_cost_per_mwh, 10.0)
+        finally:
+            save_units(Units(), "app_data")
+            delete_entry("batteries", "kwh_battery", "app_data")
 
 if __name__ == "__main__":
     unittest.main()

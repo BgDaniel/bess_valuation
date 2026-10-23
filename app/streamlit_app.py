@@ -12,6 +12,8 @@ Pages
 * Result: key figures, figures (dark theme), runtimes, parameters, downloads.
 * Batteries / Simulations: tables of the stored entries (bess_valuation.catalog) with
   forms to add, edit and delete them.
+* Settings: display units (currency label, MWh or kWh). Computations always run in MW / MWh;
+  forms convert on save, tables and figures convert for display.
 """
 
 from __future__ import annotations
@@ -26,8 +28,10 @@ import streamlit as st
 
 from bess_valuation import BatteryConfig, EngineSettings
 from bess_valuation.catalog import (DEFAULT_ROOT, SimulationSpec, delete_entry, list_batteries,
-                                    list_simulations, save_battery, save_simulation, seed_defaults)
+                                    list_simulations, load_units, save_battery, save_simulation,
+                                    save_units, seed_defaults)
 from bess_valuation.jobs import DEFAULT_JOBS_ROOT, list_jobs, read_status, submit_job
+from bess_valuation.units import CURRENCY_SYMBOLS, ENERGY_FACTORS, Units
 
 JOBS_ROOT = DEFAULT_JOBS_ROOT
 CATALOG = DEFAULT_ROOT
@@ -85,13 +89,19 @@ def _fmt_time(stamp: str | None) -> str:
     return datetime.fromisoformat(stamp).strftime("%d.%m. %H:%M")
 
 
-def _battery_facts(c: BatteryConfig) -> str:
-    return (f'<div class="facts"><b>{c.e_max - c.e_min:g} MWh</b> usable · <b>{c.p_charge_max:g}/'
-            f'{c.p_discharge_max:g} MW</b> charge/discharge · η <b>{c.eta_charge:g}/{c.eta_discharge:g}</b><br>'
-            f'{"15 min" if c.dt == 0.25 else "1 h"} · start SoC <b>{c.soc_init:g} MWh</b> · '
+def _money(value: float, u: Units) -> str:
+    """Amount in thousands, e.g. "86.9 k€"."""
+    return f"{value / 1e3:,.1f} k{u.symbol}"
+
+
+def _battery_facts(c: BatteryConfig, u: Units) -> str:
+    return (f'<div class="facts"><b>{u.energy_value(c.e_max - c.e_min):g} {u.energy}</b> usable · '
+            f'<b>{u.power_value(c.p_charge_max):g}/{u.power_value(c.p_discharge_max):g} {u.power}</b> '
+            f'charge/discharge · η <b>{c.eta_charge:g}/{c.eta_discharge:g}</b><br>'
+            f'{"15 min" if c.dt == 0.25 else "1 h"} · start SoC <b>{u.energy_value(c.soc_init):g} {u.energy}</b> · '
             f'<b>{c.soc_grid_size}</b> SoC grid points<br>'
             f'capacity fade <b>{100 * c.capacity_fade_per_year:g} %/yr</b> · wear cost '
-            f'<b>{c.wear_cost_per_mwh:g} €/MWh</b></div>')
+            f'<b>{u.price_value(c.wear_cost_per_mwh):g} {u.price}</b></div>')
 
 
 def _simulation_facts(s: SimulationSpec) -> str:
@@ -106,7 +116,7 @@ def _simulation_facts(s: SimulationSpec) -> str:
 # ------------------------------------------------------------------ page: runs
 
 
-def _new_run() -> None:
+def _new_run(u: Units) -> None:
     batteries = list_batteries(CATALOG)
     simulations = list_simulations(CATALOG)
     defaults = EngineSettings()
@@ -119,7 +129,7 @@ def _new_run() -> None:
         with col_b:
             names = [b.name for b in batteries]
             battery = batteries[names.index(st.selectbox("Battery", names))]
-            st.markdown(_battery_facts(battery), unsafe_allow_html=True)
+            st.markdown(_battery_facts(battery, u), unsafe_allow_html=True)
         with col_s:
             snames = [s.name for s in simulations]
             sim = simulations[snames.index(st.selectbox("Simulation", snames))]
@@ -147,11 +157,11 @@ def _new_run() -> None:
             cfg = dataclasses.replace(battery, soc_grid_size=int(grid))
             job_dir = submit_job({"battery": cfg.to_dict(), "prices": sim.prices_spec(), "settings": settings,
                                   "results_root": "results", "battery_name": battery.name,
-                                  "simulation_name": sim.name}, JOBS_ROOT)
+                                  "simulation_name": sim.name, "units": u.to_dict()}, JOBS_ROOT)
             st.toast(f"Run {job_dir.name} started", icon=":material/rocket_launch:")
 
 
-def _jobs_frame(jobs: list[dict]) -> pd.DataFrame:
+def _jobs_frame(jobs: list[dict], u: Units) -> pd.DataFrame:
     rows = []
     for job in jobs:
         spec_path = Path(job["job_dir"]) / "job.json"
@@ -169,9 +179,9 @@ def _jobs_frame(jobs: list[dict]) -> pd.DataFrame:
             "Step": job.get("step") if job["state"] != "failed" else (job.get("error") or "")[:80],
             "Elapsed": _fmt_duration(job.get("elapsed_s")),
             "Remaining": _fmt_duration(job.get("eta_s")) if job["state"] == "running" else "–",
-            "LSMC [k€]": k("value_oos_eur"),
-            "Intrinsic [k€]": k("value_intrinsic_eur"),
-            "Perfect Foresight [k€]": k("value_perfect_foresight_eur"),
+            f"LSMC [k{u.symbol}]": k("value_oos_eur"),
+            f"Intrinsic [k{u.symbol}]": k("value_intrinsic_eur"),
+            f"Perfect Foresight [k{u.symbol}]": k("value_perfect_foresight_eur"),
             "Solver": spec.get("settings", {}).get("daily_solver", ""),
             "Started": _fmt_time(job.get("started") or job.get("created")),
             "Result": f"/result?run={job['id']}" if job["state"] == "done" else None,
@@ -187,7 +197,7 @@ def _runs_table() -> None:
         st.caption("No runs yet – choose a battery and a simulation set and click “Run valuation”.")
         return
     st.dataframe(
-        _jobs_frame(jobs), hide_index=True, width="stretch",
+        _jobs_frame(jobs, load_units(CATALOG)), hide_index=True, width="stretch",
         column_config={
             "Progress": st.column_config.ProgressColumn("Progress", min_value=0, max_value=100,
                                                            format="%.0f %%"),
@@ -201,7 +211,7 @@ def runs_page() -> None:
     seed_defaults(CATALOG)
     _header("Valuation", "Runs", "Pick a battery and a simulation set, set the numerics, start the valuation. "
             "Runs keep computing in the background, also when the browser is closed.")
-    _new_run()
+    _new_run(load_units(CATALOG))
     _runs_table()
 
 
@@ -214,12 +224,17 @@ def batteries_page() -> None:
     _header("Master data", "Batteries", "Stored battery configurations. Add new ones or edit existing "
             "ones; the name is the key.")
     batteries = list_batteries(CATALOG)
+    u = load_units(CATALOG)
+    E, P, C = f"[{u.energy}]", f"[{u.power}]", f"[{u.price}]"
+    st.caption(f"Units: energy {u.energy}, power {u.power}, prices {u.price} (change on the Settings page).")
     st.dataframe(pd.DataFrame([{
-        "Name": c.name, "Capacity [MWh]": c.e_max - c.e_min, "e_min [MWh]": c.e_min, "e_max [MWh]": c.e_max,
-        "Charge [MW]": c.p_charge_max, "Discharge [MW]": c.p_discharge_max, "η charge": c.eta_charge,
+        "Name": c.name, f"Capacity {E}": u.energy_value(c.e_max - c.e_min), f"e_min {E}": u.energy_value(c.e_min),
+        f"e_max {E}": u.energy_value(c.e_max), f"Charge {P}": u.power_value(c.p_charge_max),
+        f"Discharge {P}": u.power_value(c.p_discharge_max), "η charge": c.eta_charge,
         "η discharge": c.eta_discharge, "Resolution": "15 min" if c.dt == 0.25 else "1 h",
-        "Start SoC [MWh]": c.soc_init, "SoC grid": c.soc_grid_size, "Terminal value [€/MWh]": c.terminal_soc_value,
-        "Fade [%/yr]": 100 * c.capacity_fade_per_year, "Wear cost [€/MWh]": c.wear_cost_per_mwh,
+        f"Start SoC {E}": u.energy_value(c.soc_init), "SoC grid": c.soc_grid_size,
+        f"Terminal value {C}": u.price_value(c.terminal_soc_value),
+        "Fade [%/yr]": 100 * c.capacity_fade_per_year, f"Wear cost {C}": u.price_value(c.wear_cost_per_mwh),
         "Simultaneous charge/discharge": c.allow_simultaneous_charge_discharge,
     } for c in batteries]), hide_index=True, width="stretch")
 
@@ -227,14 +242,19 @@ def batteries_page() -> None:
     choice = st.selectbox("Edit", names)
     cfg = batteries[names.index(choice) - 1] if choice != names[0] else BatteryConfig(
         name="new_battery", e_max=2.0, p_charge_max=1.0, p_discharge_max=1.0, soc_init=1.0, soc_grid_size=9)
-    with st.form(f"battery_{choice}", border=True):
+    f = u.energy_factor
+    with st.form(f"battery_{choice}_{u.energy}", border=True):
         c1, c2, c3, c4 = st.columns(4)
         name = c1.text_input("Name", cfg.name)
-        e_min = c2.number_input("e_min [MWh]", value=float(cfg.e_min), min_value=0.0, step=0.5)
-        e_max = c3.number_input("e_max [MWh]", value=float(cfg.e_max), min_value=0.1, step=0.5)
-        soc_init = c4.number_input("Start SoC [MWh]", value=float(cfg.soc_init), min_value=0.0, step=0.25)
-        p_ch = c1.number_input("Charge power [MW]", value=float(cfg.p_charge_max), min_value=0.01, step=0.5)
-        p_dis = c2.number_input("Discharge power [MW]", value=float(cfg.p_discharge_max), min_value=0.01, step=0.5)
+        e_min = c2.number_input(f"e_min {E}", value=u.energy_value(float(cfg.e_min)), min_value=0.0, step=0.5 * f)
+        e_max = c3.number_input(f"e_max {E}", value=u.energy_value(float(cfg.e_max)), min_value=0.1 * f,
+                                step=0.5 * f)
+        soc_init = c4.number_input(f"Start SoC {E}", value=u.energy_value(float(cfg.soc_init)), min_value=0.0,
+                                   step=0.25 * f)
+        p_ch = c1.number_input(f"Charge power {P}", value=u.power_value(float(cfg.p_charge_max)),
+                               min_value=0.01 * f, step=0.5 * f)
+        p_dis = c2.number_input(f"Discharge power {P}", value=u.power_value(float(cfg.p_discharge_max)),
+                                min_value=0.01 * f, step=0.5 * f)
         eta_c = c3.number_input("η charge", value=float(cfg.eta_charge), min_value=0.5, max_value=1.0,
                                 step=0.01, format="%.3f")
         eta_d = c4.number_input("η discharge", value=float(cfg.eta_discharge), min_value=0.5, max_value=1.0,
@@ -242,23 +262,25 @@ def batteries_page() -> None:
         dt = c1.selectbox("Time resolution", [0.25, 1.0], index=0 if cfg.dt == 0.25 else 1,
                           format_func=lambda v: "15 min" if v == 0.25 else "1 h")
         grid = c2.number_input("SoC grid points", value=int(cfg.soc_grid_size), min_value=2, max_value=41)
-        terminal = c3.number_input("Terminal value [€/MWh]", value=float(cfg.terminal_soc_value), step=10.0)
+        terminal = c3.number_input(f"Terminal value {C}", value=u.price_value(float(cfg.terminal_soc_value)),
+                                   step=10.0 / f, format="%.4g")
         simultaneous = c4.checkbox("Simultaneous charge/discharge", value=cfg.allow_simultaneous_charge_discharge)
         fade = c1.number_input("Capacity fade [%/yr]", value=100 * float(cfg.capacity_fade_per_year), min_value=0.0,
                                max_value=99.0, step=0.5,
                                help="linear loss of usable capacity, applied in monthly steps")
-        wear = c2.number_input("Wear cost [€/MWh]", value=float(cfg.wear_cost_per_mwh), min_value=0.0, step=1.0,
-                               help="degradation cost per discharged MWh, charged in the optimisation")
+        wear = c2.number_input(f"Wear cost {C}", value=u.price_value(float(cfg.wear_cost_per_mwh)), min_value=0.0,
+                               step=1.0 / f, format="%.4g",
+                               help=f"degradation cost per discharged {u.energy}, charged in the optimisation")
         saved = st.form_submit_button("Save", type="primary", icon=":material/save:")
     if saved:
         try:
-            new = dataclasses.replace(cfg, name=name.strip(), e_min=e_min, e_max=e_max, soc_init=soc_init,
-                                      p_charge_max=p_ch, p_discharge_max=p_dis, eta_charge=eta_c,
-                                      eta_discharge=eta_d, dt=dt, soc_grid_size=int(grid),
-                                      terminal_soc_value=terminal,
+            new = dataclasses.replace(cfg, name=name.strip(), e_min=e_min / f, e_max=e_max / f,
+                                      soc_init=soc_init / f, p_charge_max=p_ch / f, p_discharge_max=p_dis / f,
+                                      eta_charge=eta_c, eta_discharge=eta_d, dt=dt, soc_grid_size=int(grid),
+                                      terminal_soc_value=terminal * f,
                                       allow_simultaneous_charge_discharge=simultaneous,
                                       max_cycles_per_day_avg=None, capacity_fade_per_year=fade / 100.0,
-                                      wear_cost_per_mwh=wear)
+                                      wear_cost_per_mwh=wear * f)
             save_battery(new, CATALOG)
             if choice != names[0] and new.name != cfg.name:
                 delete_entry("batteries", cfg.name, CATALOG)
@@ -325,6 +347,39 @@ def simulations_page() -> None:
         st.rerun()
 
 
+# ------------------------------------------------------------------ page: settings
+
+
+def settings_page() -> None:
+    """Display units: currency label and energy unit."""
+    _header("App", "Settings", "Display units for forms, tables and figures. The valuation itself always "
+            "runs in MW / MWh; the currency is a label for the price data, amounts are not converted.")
+    u = load_units(CATALOG)
+    codes = list(CURRENCY_SYMBOLS)
+    with st.form("units", border=True):
+        c1, c2 = st.columns(2)
+        currency = c1.selectbox("Currency", codes + ["other"],
+                                index=codes.index(u.currency) if u.currency in codes else len(codes),
+                                format_func=lambda c: f"{c} ({CURRENCY_SYMBOLS[c]})" if c in CURRENCY_SYMBOLS
+                                else "other …")
+        other = c1.text_input("Other currency code", "" if u.currency in codes else u.currency,
+                              help="used if “other” is selected")
+        energy = c2.radio("Energy unit", list(ENERGY_FACTORS), index=list(ENERGY_FACTORS).index(u.energy),
+                          horizontal=True, help="power follows (MW / kW), prices are per energy unit")
+        saved = st.form_submit_button("Save", type="primary", icon=":material/save:")
+    if saved:
+        try:
+            save_units(Units(currency=other.strip().upper() if currency == "other" else currency,
+                             energy=energy), CATALOG)
+            st.toast("Units saved", icon=":material/check:")
+            st.rerun()
+        except ValueError as exc:
+            st.error(f"Invalid units: {exc}")
+    st.markdown(f'<div class="facts">Current: amounts in <b>{u.symbol}</b> · energy <b>{u.energy}</b> · '
+                f'power <b>{u.power}</b> · prices <b>{u.price}</b><br>New runs store these units; '
+                f'their figures and result page use them.</div>', unsafe_allow_html=True)
+
+
 # ------------------------------------------------------------------ page: result
 
 
@@ -344,20 +399,21 @@ def result_page() -> None:
     run_dir = Path(job["run_dir"])
     summary = json.loads((run_dir / "summary.json").read_text())
     spec = json.loads((Path(job["job_dir"]) / "job.json").read_text())
+    u = Units.from_dict(spec["units"]) if "units" in spec else load_units(CATALOG)
 
     _header("Result", summary["name"],
             f'{spec.get("simulation_name", "")} · {summary["n_paths_regression"]} regression + '
             f'{summary["n_paths_oos"]} out-of-sample paths · {summary["n_days"]} days from {summary["start"]} · '
             f'{summary["soc_grid_size"]} SoC grid points · solver {summary.get("daily_solver", "")}')
     m = st.columns(6)
-    m[0].metric("LSMC", f"{summary['value_oos_eur'] / 1e3:,.1f} k€",
-                help=f"Out-of-sample value of the policy, ± {summary['value_oos_stderr_eur'] / 1e3:.2f} k€ "
-                     f"standard error; in-sample {summary['value_in_sample_eur'] / 1e3:,.1f} k€")
-    m[1].metric("Intrinsic", f"{summary['value_intrinsic_eur'] / 1e3:,.1f} k€",
+    m[0].metric("LSMC", _money(summary["value_oos_eur"], u),
+                help=f"Out-of-sample value of the policy, ± {_money(summary['value_oos_stderr_eur'], u)} "
+                     f"standard error; in-sample {_money(summary['value_in_sample_eur'], u)}")
+    m[1].metric("Intrinsic", _money(summary["value_intrinsic_eur"], u),
                 help="optimal schedule on the mean price path")
-    m[2].metric("Extrinsic", f"{summary['value_extrinsic_eur'] / 1e3:,.1f} k€",
+    m[2].metric("Extrinsic", _money(summary["value_extrinsic_eur"], u),
                 f"{100 * summary['extrinsic_share']:.1f} % of the value", delta_color="off")
-    m[3].metric("Perfect Foresight", f"{summary['value_perfect_foresight_eur'] / 1e3:,.1f} k€")
+    m[3].metric("Perfect Foresight", _money(summary["value_perfect_foresight_eur"], u))
     m[4].metric("Cycles per day", f"{summary['cycles_per_day_mean']:.2f}")
     m[5].metric("Regression R² (median)", f"{summary.get('regression_r2_median', float('nan')):.2f}")
 
@@ -373,6 +429,7 @@ def result_page() -> None:
     left, right = st.columns([1.2, 1], gap="large")
     with left:
         st.subheader("Key figures")
+        st.caption(f"Raw values: amounts in {u.currency} ({u.symbol}), energy in MWh, power in MW.")
         rows = [(k, v) for k, v in summary.items() if not k.startswith("runtime_")]
         st.dataframe(pd.DataFrame(rows, columns=["Quantity", "Value"]).astype({"Value": str}),
                      hide_index=True, width="stretch", height=420)
@@ -409,6 +466,9 @@ def main() -> None:
             st.Page(batteries_page, title="Batteries", icon=":material/battery_full:", url_path="batteries"),
             st.Page(simulations_page, title="Simulations", icon=":material/stacked_line_chart:",
                     url_path="simulations"),
+        ],
+        "App": [
+            st.Page(settings_page, title="Settings", icon=":material/tune:", url_path="settings"),
         ],
     })
     nav.run()

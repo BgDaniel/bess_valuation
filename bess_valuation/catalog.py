@@ -4,7 +4,8 @@ Each entry is one YAML file:
 
 * ``<root>/batteries/<name>.yaml``: a :class:`BatteryConfig`;
 * ``<root>/simulations/<name>.yaml``: a :class:`SimulationSpec` (where the price paths come
-  from and how many).
+  from and how many);
+* ``<root>/settings.yaml``: app settings, currently the display units (:class:`Units`).
 
 A run combines one battery, one simulation set and the numerical settings.
 """
@@ -20,6 +21,7 @@ from typing import Any, Literal
 import yaml
 
 from bess_valuation.config import BatteryConfig
+from bess_valuation.units import Units
 
 DEFAULT_ROOT = Path("app_data")
 DEFAULT_GENERATOR_CONFIG = "configs/prices_synthetic.yaml"
@@ -130,6 +132,24 @@ def delete_entry(kind: Literal["batteries", "simulations"], name: str,
                  root: str | Path = DEFAULT_ROOT) -> None:
     """Remove a stored battery or simulation set (no error if it does not exist)."""
     (Path(root) / kind / f"{slug(name)}.yaml").unlink(missing_ok=True)
+
+
+def load_units(root: str | Path = DEFAULT_ROOT) -> Units:
+    """Display units stored in ``<root>/settings.yaml`` (defaults if none are stored)."""
+    path = Path(root) / "settings.yaml"
+    if not path.exists():
+        return Units()
+    with open(path, encoding="utf-8") as f:
+        return Units.from_dict((yaml.safe_load(f) or {}).get("units"))
+
+
+def save_units(units: Units, root: str | Path = DEFAULT_ROOT) -> Path:
+    """Store the display units in ``<root>/settings.yaml``."""
+    path = Path(root) / "settings.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump({"units": units.to_dict()}, f, sort_keys=False)
+    return path
 
 
 def seed_defaults(root: str | Path = DEFAULT_ROOT, configs: str | Path = "configs") -> None:

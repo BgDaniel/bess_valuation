@@ -48,11 +48,18 @@ poetry install --with app
 poetry run streamlit run app/streamlit_app.py
 ```
 
-Pages: *Läufe* (pick a stored battery and simulation set, numerical settings, start; live
-table with progress and remaining time), *Ergebnis* (key figures, figures, downloads),
-*Batterien* and *Simulationen* (stored master data, `app_data/`, see
-`bess_valuation/catalog.py`). Runs are background jobs (`bess_valuation/jobs.py`, folders
-under `results/_jobs/`), so they keep running when the browser is closed.
+Pages: *Runs* (pick a stored battery and simulation set, numerical settings, start; live
+table with progress and remaining time), *Result* (key figures, figures, downloads),
+*Batteries* and *Simulations* (stored master data, `app_data/`, see
+`bess_valuation/catalog.py`), *Settings* (display units). Runs are background jobs
+(`bess_valuation/jobs.py`, folders under `results/_jobs/`), so they keep running when the
+browser is closed.
+
+Display units (`bess_valuation/units.py`, stored in `app_data/settings.yaml`): a currency
+label (EUR, USD, GBP, CHF, … or any code) and MWh or kWh; power and prices follow (kW,
+€/kWh). The engine always computes in MW / MWh and the currency of the price data; the
+currency is a label, not converted. Battery forms convert on save, tables, metrics and the
+figures of a run use the units chosen when it was started (`Result.save(units=...)`).
 
 ## Degradation
 

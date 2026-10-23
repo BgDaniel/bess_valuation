@@ -26,6 +26,7 @@ from bess_valuation.library import (VertexLibrary, library_path, library_stats, 
                                     save_library)
 from bess_valuation.lsmc import BackwardResult, EngineSettings, _features, backward_induction
 from bess_valuation.prices import PriceScenarios
+from bess_valuation.units import Units
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,7 @@ class Result:
         }
 
     def save(self, root: str | Path = "results", plots: bool = True, pdf: bool = False,
-             dark_figures: bool = False) -> Path:
+             dark_figures: bool = False, units: Units | None = None) -> Path:
         """Write the output folder ``root/<config.name>/<YYYYMMDD_HHMMSS>/`` (SPEC section 6).
 
         Contents: ``config.yaml``, ``prices_meta.json``, ``summary.json``, ``summary.csv``,
@@ -170,6 +171,8 @@ class Result:
         point: R^2, variance ratio), ``library_stats.json`` (library solver) and
         ``figures/*.png``;
         with ``dark_figures`` also ``figures_dark/*.png`` (dark theme, used by the app).
+        ``units`` (display units of the figures, :class:`bess_valuation.units.Units`) are
+        stored in ``prices_meta.json``; the data files keep MW, MWh and the price currency.
 
         Returns:
             The run folder.
@@ -178,6 +181,7 @@ class Result:
         self.config.to_yaml(run_dir / "config.yaml")
         meta = dict(self.prices_meta)
         meta["settings"] = asdict(self.settings)
+        meta["display_units"] = (units or Units()).to_dict()
         _write_json(run_dir / "prices_meta.json", meta)
         summary = self.summary()
         _write_json(run_dir / "summary.json", summary)
@@ -195,10 +199,10 @@ class Result:
         if plots:
             from bess_valuation.plots import plot_results
 
-            figures = plot_results(self, run_dir / "figures", pdf=pdf)
+            figures = plot_results(self, run_dir / "figures", pdf=pdf, units=units)
             logger.info("%d figures written to %s", len(figures), run_dir / "figures")
             if dark_figures:
-                plot_results(self, run_dir / "figures_dark", theme="dark")
+                plot_results(self, run_dir / "figures_dark", theme="dark", units=units)
         self.run_dir = run_dir
         logger.info("results saved to %s", run_dir)
         return run_dir
