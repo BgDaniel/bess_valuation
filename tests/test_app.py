@@ -158,17 +158,17 @@ class TestStreamlitApp(unittest.TestCase):
         at = AppTest.from_file(str(REPO / "app" / "streamlit_app.py"), default_timeout=60)
         at.run()
         self.assertFalse(at.exception, at.exception)
-        self.assertEqual(at.title[0].value, "Läufe")
+        self.assertEqual(at.title[0].value, "Runs")
         frame = at.dataframe[0].value
-        self.assertIn("fertig", frame["Status"].iloc[0])
-        self.assertTrue(frame["Ergebnis"].iloc[0].endswith(self.job_dir.name))
-        # start a tiny run: 2 MWh battery (15 min) + "tiny" simulation
-        battery_box = next(b for b in at.selectbox if b.label == "Batterie")
+        self.assertIn("done", frame["Status"].iloc[0])
+        self.assertTrue(frame["Result"].iloc[0].endswith(self.job_dir.name))
+        # start a tiny run: 2 MWh battery (15 min) + "tiny" simulation set
+        battery_box = next(b for b in at.selectbox if b.label == "Battery")
         sim_box = next(b for b in at.selectbox if b.label == "Simulation")
         battery_box.select("bess_1mw_2mwh")
         sim_box.select("tiny")
         at.run()
-        next(b for b in at.button if b.label == "Berechnen").click()
+        next(b for b in at.button if b.label == "Run valuation").click()
         at.run()
         self.assertFalse(at.exception, at.exception)
         jobs = [j for j in list_jobs(Path("results") / "_jobs") if j["id"] != self.job_dir.name]
@@ -181,13 +181,13 @@ class TestStreamlitApp(unittest.TestCase):
         self.assertEqual(spec["settings"]["daily_solver"], "dp")
 
     def test_master_data_pages(self):
-        for page, title in (("batteries_page", "Batterien"), ("simulations_page", "Simulationen")):
+        for page, title in (("batteries_page", "Batteries"), ("simulations_page", "Simulations")):
             at = self._page_test(page)
             at.run()
             self.assertFalse(at.exception, at.exception)
             self.assertEqual(at.title[0].value, title)
             self.assertGreaterEqual(len(at.dataframe[0].value), 2)
-            self.assertTrue(any(b.label == "Speichern" for b in at.button))
+            self.assertTrue(any(b.label == "Save" for b in at.button))
 
     def test_result_page(self):
         def script(app_dir):
