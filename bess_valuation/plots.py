@@ -461,6 +461,42 @@ def plot_library(result, out_dir: Path, pdf: bool = False) -> Path:
     return save_figure(fig, out_dir, "12_vertex_library", pdf)
 
 
+def plot_convexity(result, out_dir: Path, pdf: bool = False) -> Path:
+    """Revenue of one day along its three principal price directions (convex by theory)."""
+    apply_style()
+    c = result.convexity
+    k = c.directions.shape[0]
+    n_t = c.mean_price.size
+    hours = (np.arange(n_t) + 0.5) * 24.0 / n_t
+    fig, axes = plt.subplots(2, k, figsize=(4.2 * k, 7), layout="constrained", squeeze=False)
+    pair_labels = [f"{a:g} -> {b:g} MWh" for a, b in c.pairs]
+    for i in range(k):
+        ax = axes[0, i]
+        ax.plot(hours, c.mean_price, color=INK_SECONDARY, lw=1.2, label="mean curve")
+        ax.plot(hours, c.mean_price + c.sigma[i] * c.directions[i], color=SERIES[0], lw=1.4,
+                label="+1 σ along the direction")
+        ax.plot(hours, c.mean_price - c.sigma[i] * c.directions[i], color=SERIES[1], lw=1.4,
+                label="-1 σ along the direction")
+        ax.set_title(f"direction {i + 1}: {100 * c.explained[i]:.0f} % of the price variance")
+        hour_axis(ax)
+        ax.set_ylabel("price [€/MWh]")
+        ax = axes[1, i]
+        for j, label in enumerate(pair_labels):
+            ax.plot(c.t, c.values[i, :, j], color=SERIES[j], lw=1.6, marker="o", ms=2.5, label=label)
+        lo = np.nanmin(c.values[i][np.isfinite(c.values[i])])
+        ax.plot(c.scores[i], np.full(c.scores.shape[1], lo), "|", color=INK_SECONDARY, ms=8, alpha=0.5,
+                label="out-of-sample curves")
+        ok = bool(np.all(c.min_second_difference[i] >= -c.tolerance))
+        ax.set_title(f"revenue along direction {i + 1}: {'convex ✓' if ok else 'NOT convex ✗'}")
+        ax.set_xlabel("t [multiples of σ]")
+        ax.set_ylabel("daily revenue [€]")
+    axes[0, 0].legend(loc="upper left", fontsize=7)
+    axes[1, 0].legend(loc="best", fontsize=7)
+    fig.suptitle(f"Convexity of the daily revenue along the principal price factors, {c.date}, "
+                 f"{result.config.name}", fontsize=10, fontweight="bold")
+    return save_figure(fig, out_dir, "15_convexity", pdf)
+
+
 def plot_results(result, out_dir: Path, pdf: bool = False, theme: str = "light") -> list[Path]:
     """Write all valuation figures implemented so far in the given theme; returns their paths."""
     previous = THEME
@@ -470,6 +506,8 @@ def plot_results(result, out_dir: Path, pdf: bool = False, theme: str = "light")
                  plot_dispatch_profile, plot_continuation, plot_regression]
         if result.library is not None and result.library.pairs:
             funcs.append(plot_library)
+        if result.convexity is not None:
+            funcs.append(plot_convexity)
         return [f(result, out_dir, pdf) for f in funcs]
     finally:
         apply_style(previous)

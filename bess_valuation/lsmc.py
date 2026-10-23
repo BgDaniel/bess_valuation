@@ -75,6 +75,8 @@ class EngineSettings:
         max_vertices: Cap of cached vertices per SoC pair.
         seed: Seed of the library processing order.
         plot_days: Number of days whose continuation curves are kept for plot 9.
+        convexity_day: Day index of the convexity check along the principal price
+            directions (:mod:`bess_valuation.convexity`); None: the middle day.
     """
 
     n_regression_paths: int | None = None
@@ -88,6 +90,7 @@ class EngineSettings:
     max_vertices: int = 1000
     seed: int = 0
     plot_days: int = 4
+    convexity_day: int | None = None
 
 
 @dataclass

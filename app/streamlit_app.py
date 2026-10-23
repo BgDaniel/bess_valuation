@@ -44,6 +44,7 @@ FIGURE_TITLES = {
     "09_continuation_value": "Continuation value",
     "12_vertex_library": "Vertex library",
     "13_regression": "Regression (R²)",
+    "15_convexity": "Convexity",
 }
 
 # Only what the theme config cannot do; selectors kept few (they may change with Streamlit).
@@ -381,7 +382,8 @@ def result_page() -> None:
         st.dataframe(pd.DataFrame(times, columns=["Step", "Seconds"]), hide_index=True, width="stretch",
                      column_config={"Seconds": st.column_config.NumberColumn(format="%.1f")})
         st.subheader("Downloads")
-        files = [f for f in ("summary.csv", "daily.parquet", "regression.parquet", "paths.parquet")
+        files = [f for f in ("summary.csv", "daily.parquet", "regression.parquet", "convexity.parquet",
+                             "paths.parquet")
                  if (run_dir / f).exists()]
         cols = st.columns(2)
         for k, f in enumerate(files):

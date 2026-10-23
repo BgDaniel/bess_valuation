@@ -16,8 +16,10 @@ import numpy as np
 import pandas as pd
 
 from bess_valuation.config import BatteryConfig
+from bess_valuation.convexity import ConvexityResult, convexity_analysis
 from bess_valuation.daily import daily_value_table_by_capacity
-from bess_valuation.degradation import CapacityFactor, capacity_factors, grid_fractions, soc_grid_days
+from bess_valuation.degradation import (CapacityFactor, capacity_factors, day_config, grid_fractions,
+                                       soc_grid_days)
 from bess_valuation.forward import ForwardResult, attach_schedules, forward_simulation, grid_bellman
 from bess_valuation.io import new_run_dir
 from bess_valuation.library import (VertexLibrary, library_path, library_stats, load_or_create,
@@ -55,6 +57,7 @@ class Result:
         daily_solver: Daily solver actually used.
         kappa: Capacity factor per day, shape (D,) (1 without degradation).
         grid_days: SoC grid [MWh] per day (relative grid times the day's capacity), shape (D, G).
+        convexity: Revenue along the principal price directions of one day.
     """
 
     config: BatteryConfig
@@ -79,6 +82,7 @@ class Result:
     daily_solver: str = "dp"
     kappa: np.ndarray | None = None
     grid_days: np.ndarray | None = None
+    convexity: ConvexityResult | None = None
 
     def __post_init__(self) -> None:
         if self.kappa is None:
@@ -149,6 +153,10 @@ class Result:
             "library_good_turing": lib.get("good_turing", float("nan")),
             "library_simplex_solves": lib.get("simplex", 0),
             "library_case_splits": lib.get("case_split", 0),
+            "convexity_date": str(self.convexity.date) if self.convexity else "",
+            "convexity_ok": self.convexity.convex if self.convexity else None,
+            "convexity_min_second_difference_eur": (float(self.convexity.min_second_difference.min())
+                                                    if self.convexity else float("nan")),
             **{f"runtime_{k}_s": v for k, v in self.runtimes.items()},
         }
 
@@ -180,6 +188,8 @@ class Result:
         self.paths_frame().to_parquet(run_dir / "paths.parquet", index=False)
         self.daily_frame().to_parquet(run_dir / "daily.parquet", index=False)
         self.regression_frame().to_parquet(run_dir / "regression.parquet", index=False)
+        if self.convexity is not None:
+            self.convexity_frame().to_parquet(run_dir / "convexity.parquet", index=False)
         if self.library_stats:
             _write_json(run_dir / "library_stats.json", self.library_stats)
         if plots:
@@ -237,6 +247,17 @@ class Result:
         day, j = np.indices((d, g)).reshape(2, -1)
         return pd.DataFrame({"day": day, "date": self.dates[day], "soc_mwh": self.grid_days[day, j],
                              "r2": bw.r2.ravel(), "variance_ratio": bw.var_ratio.ravel()})
+
+
+    def convexity_frame(self) -> pd.DataFrame:
+        """Revenue along the principal price directions: direction, t, SoC pair, value."""
+        c = self.convexity
+        k, m, p = c.values.shape
+        kk, mm, pp = np.indices((k, m, p)).reshape(3, -1)
+        return pd.DataFrame({"date": str(c.date), "direction": kk + 1, "t_sigma": c.t[mm],
+                             "price_shift_eur_per_mwh": c.t[mm] * c.sigma[kk],
+                             "soc_start_mwh": c.pairs[pp, 0], "soc_end_mwh": c.pairs[pp, 1],
+                             "revenue_eur": c.values.ravel(), "explained_variance": c.explained[kk]})
 
 
 def _write_json(path: Path, data: Any) -> None:
@@ -435,6 +456,15 @@ def run_engine(config: BatteryConfig, prices: PriceScenarios,
     runtimes["intrinsic_and_perfect_foresight"] = time.perf_counter() - t0
     if done is not None:
         done(1.0)
+    t0 = time.perf_counter()
+    cday = prices.n_days // 2 if settings.convexity_day is None else min(max(settings.convexity_day, 0),
+                                                                        prices.n_days - 1)
+    convexity = convexity_analysis(oos.da[:, cday], day_config(config, float(kappa[cday])),
+                                   grid_days[cday], solver, cday, prices.dates[cday], wear)
+    runtimes["convexity_check"] = time.perf_counter() - t0
+    if not convexity.convex:
+        logger.warning("convexity check failed on %s (min second difference %.3g EUR)",
+                       prices.dates[cday], convexity.min_second_difference.min())
 
     if solver == "library" and settings.library_dir is not None:
         save_library(libraries[1.0], library_path(settings.library_dir, config, "full"))
@@ -449,7 +479,8 @@ def run_engine(config: BatteryConfig, prices: PriceScenarios,
                     da_oos=oos.da, intrinsic_value=float(iv[0]), intrinsic_cash=icash[0],
                     intrinsic_soc_index=iidx[0], pf_value=pf_value, pf_cash=pf_cash,
                     library=library, library_stats=library_stats(library) if library else {},
-                    runtimes=runtimes, daily_solver=solver, kappa=kappa, grid_days=grid_days)
+                    runtimes=runtimes, daily_solver=solver, kappa=kappa, grid_days=grid_days,
+                    convexity=convexity)
     s = result.summary()
     logger.info("values [EUR]: in-sample %.0f, out-of-sample %.0f +- %.0f, intrinsic %.0f, "
                 "perfect foresight %.0f", s["value_in_sample_eur"], s["value_oos_eur"],
