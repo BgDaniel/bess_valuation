@@ -25,3 +25,14 @@ Full specification: [docs/SPEC.md](docs/SPEC.md). Read it before working on a mi
 - [ ] 4. IDA1–3 stages, half-day library, plots 3, 6, 8
 - [ ] 5. Cycle limit (Lagrange + counter), plot 11
 - [ ] 6. Performance tuning, remaining plots, runtime report
+
+## Backlog (agreed with the user, not yet scheduled)
+
+- Battery degradation, monthly granularity (capacity fixed within a day, so the daily
+  problem stays 1-D in SoC):
+  1. user-given constant degradation (e.g. capacity / efficiency path per month);
+  2. cycle-dependent degradation (wear cost per discharged MWh and/or capacity loss
+     driven by throughput).
+- Compare daily solvers on DA prices: library + warm-started simplex vs. cold simplex vs.
+  exact DP over SoC (one backward pass gives all start SoCs for a given end SoC).
+- Progress bar for the schedule lookup in the forward simulation; keep finished bars.
