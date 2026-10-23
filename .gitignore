@@ -17,3 +17,4 @@ data/scenarios/*
 results/*
 !results/.gitkeep
 library_cache/
+value_cache/

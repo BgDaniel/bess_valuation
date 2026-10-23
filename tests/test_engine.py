@@ -17,7 +17,7 @@ from bess_valuation.lsmc import concave_projection, monomial_exponents
 CONFIG = BatteryConfig(name="engine_test", e_max=2.0, p_charge_max=1.0, p_discharge_max=1.0,
                        eta_charge=0.95, eta_discharge=0.95, dt=1.0, soc_init=1.0,
                        soc_grid_size=5, terminal_soc_value=40.0)
-SETTINGS = EngineSettings(library_dir=None)
+SETTINGS = EngineSettings(library_dir=None, value_cache_dir=None)
 
 
 def prices(n_paths=40, n_days=30, seed=11):
@@ -130,9 +130,36 @@ class TestVariants(unittest.TestCase):
         p = prices(n_paths=20, n_days=10, seed=3)
         p.X = None
         p.conditional_mean = None
-        r = run_engine(CONFIG, p, EngineSettings(library_dir=None, degree=1))
+        r = run_engine(CONFIG, p, EngineSettings(library_dir=None, value_cache_dir=None, degree=1,
+                                                 control_variate=True))
         self.assertTrue(np.all(r.backward.var_ratio == 1.0))
         self.assertTrue(np.all(r.pf_value >= r.forward.value - 1e-6))
+
+    def test_control_variate(self):
+        p = prices(n_paths=20, n_days=10, seed=5)
+        r = run_engine(CONFIG, p, dataclasses.replace(SETTINGS, control_variate=True))
+        self.assertTrue(r.backward.model.control_variate)
+        self.assertIn("library_conditional_mean", r.runtimes)
+        self.assertTrue(np.all(r.pf_value >= r.forward.value - 1e-6))
+
+    def test_value_cache(self):
+        p = prices(n_paths=20, n_days=10, seed=8)
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = dataclasses.replace(SETTINGS, value_cache_dir=tmp)
+            first = run_engine(CONFIG, p, settings)
+            files = list(Path(tmp).glob("*.npy"))
+            self.assertEqual(len(files), 1)
+            second = run_engine(CONFIG, p, dataclasses.replace(settings, degree=1))
+            self.assertEqual(second.library_stats["queries"] < first.library_stats["queries"], True)
+            np.testing.assert_array_equal(second.pf_value, first.pf_value)
+            # other prices or other battery physics do not hit the cache
+            p.da[0, 0, 0] += 1.0
+            run_engine(CONFIG, p, settings)
+            run_engine(dataclasses.replace(CONFIG, eta_charge=0.9), p, settings)
+            self.assertEqual(len(list(Path(tmp).glob("*.npy"))), 3)
+            # non-physical changes (name, start SoC, terminal value) reuse it
+            run_engine(dataclasses.replace(CONFIG, name="other", soc_init=0.5), p, settings)
+            self.assertEqual(len(list(Path(tmp).glob("*.npy"))), 3)
 
     def test_simultaneous_allowed_is_not_worse(self):
         p = prices(n_paths=20, n_days=10, seed=4)
@@ -148,7 +175,8 @@ class TestVariants(unittest.TestCase):
             CONFIG.to_yaml(Path(tmp) / "cfg.yaml")
             cli_main(["--log-level", "WARNING", "run", "--config", str(Path(tmp) / "cfg.yaml"),
                       "--prices", str(Path(tmp) / "scen"), "--no-plots", "--library-dir",
-                      str(Path(tmp) / "lib"), "--results", str(Path(tmp) / "res")])
+                      str(Path(tmp) / "lib"), "--value-cache-dir", str(Path(tmp) / "cache"),
+                      "--results", str(Path(tmp) / "res")])
             runs = list((Path(tmp) / "res" / CONFIG.name).iterdir())
             self.assertEqual(len(runs), 1)
             self.assertTrue((runs[0] / "summary.json").exists())

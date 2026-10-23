@@ -58,8 +58,13 @@ class EngineSettings:
         features: "state" (``prices.X``), "prices" (daily mean and max - min of the DA
             prices) or "auto" (state if available).
         control_variate: Use the intrinsic control variate if ``conditional_mean`` exists.
+            Off by default: on the synthetic scenarios it reduced the regression variance
+            by a factor of only ~1.004 but cost about a quarter of the runtime.
         concave_projection: Project the continuation value onto concave functions of SoC.
         library_dir: Folder of the persisted vertex libraries (None: do not persist).
+        value_cache_dir: Folder of cached daily-value tables F (None: no cache); a run
+            on the same battery physics, SoC grid and price scenarios loads them instead
+            of solving the daily problems again.
         max_vertices: Cap of cached vertices per SoC pair.
         seed: Seed of the library processing order.
         plot_days: Number of days whose continuation curves are kept for plot 9.
@@ -68,9 +73,10 @@ class EngineSettings:
     n_regression_paths: int | None = None
     degree: int = 2
     features: str = "auto"
-    control_variate: bool = True
+    control_variate: bool = False
     concave_projection: bool = True
     library_dir: str | None = "library_cache"
+    value_cache_dir: str | None = "value_cache"
     max_vertices: int = 1000
     seed: int = 0
     plot_days: int = 4

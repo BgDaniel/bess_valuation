@@ -25,6 +25,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--degree", type=int, default=2, help="polynomial degree of the regression basis")
     run.add_argument("--library-dir", default="library_cache",
                      help="folder of persisted vertex libraries ('none' to disable)")
+    run.add_argument("--value-cache-dir", default="value_cache",
+                     help="folder of cached daily-value tables ('none' to disable)")
+    run.add_argument("--control-variate", action=argparse.BooleanOptionalAction, default=False,
+                     help="intrinsic control variate in the regression (needs conditional_mean)")
     run.add_argument("--results", default="results", help="results root folder")
 
     gen = sub.add_parser("generate-prices", help="simulate synthetic DA / IDA scenarios")
@@ -56,8 +60,10 @@ def main(argv: list[str] | None = None) -> None:
         config = BatteryConfig.from_yaml(args.config)
         prices = PriceScenarios.from_files(args.prices)
         library_dir = None if args.library_dir.lower() == "none" else args.library_dir
+        cache_dir = None if args.value_cache_dir.lower() == "none" else args.value_cache_dir
         settings = EngineSettings(n_regression_paths=args.n_regression_paths, degree=args.degree,
-                                  library_dir=library_dir)
+                                  library_dir=library_dir, value_cache_dir=cache_dir,
+                                  control_variate=args.control_variate)
         result = run_engine(config, prices, settings)
         run_dir = result.save(args.results, plots=args.plots)
         logging.getLogger(__name__).info("run folder: %s", run_dir)

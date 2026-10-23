@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import logging
 import time
@@ -183,6 +184,47 @@ def _json_default(obj: Any) -> Any:
     return str(obj)
 
 
+def cached_daily_values(cache_dir: str | Path | None, library: VertexLibrary, config: BatteryConfig,
+                        prices: np.ndarray, grid: np.ndarray, desc: str, seed: int = 0) -> np.ndarray:
+    """:func:`daily_values` with a file cache keyed by battery physics, SoC grid and prices.
+
+    The key is a SHA-256 over the config hash (physical parameters only), the grid, the
+    zero cycle cost and the raw price array, so a cached table is only reused for
+    exactly the same daily problems.
+
+    Args:
+        cache_dir: Cache folder (None: always compute).
+        library: Vertex library used on a cache miss.
+        config: Battery parameters.
+        prices: Prices [€/MWh], shape (N, D, T).
+        grid: SoC grid [MWh].
+        desc: Progress-bar label.
+        seed: Library processing order.
+
+    Returns:
+        Daily values [€], shape (N, D, G, G).
+    """
+    if cache_dir is None:
+        return daily_values(library, prices, grid, desc=desc, seed=seed)
+    h = hashlib.sha256()
+    h.update(config.config_hash.encode())
+    h.update(np.ascontiguousarray(grid, dtype=np.float64).tobytes())
+    h.update(b"cycle_cost=0")
+    h.update(str(prices.shape).encode() + str(prices.dtype).encode())
+    h.update(np.ascontiguousarray(prices).tobytes())
+    path = Path(cache_dir) / f"{config.config_hash}_{h.hexdigest()[:16]}.npy"
+    if path.exists():
+        logger.info("%s: loaded cached daily values from %s", desc, path)
+        return np.load(path)
+    F = daily_values(library, prices, grid, desc=desc, seed=seed)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp.npy")
+    np.save(tmp, F)
+    tmp.replace(path)
+    logger.info("%s: daily values cached in %s", desc, path)
+    return F
+
+
 def run_engine(config: BatteryConfig, prices: PriceScenarios,
                settings: EngineSettings | None = None) -> Result:
     """Value the battery on DA prices: backward induction plus forward simulation.
@@ -224,14 +266,14 @@ def run_engine(config: BatteryConfig, prices: PriceScenarios,
     t0 = time.perf_counter()
     F_mu_reg = F_mu_oos = None
     if use_cv:
-        F_mu_reg = daily_values(library, reg.conditional_mean, grid, desc="F(mu), regression paths",
-                                seed=settings.seed)
-        F_mu_oos = daily_values(library, oos.conditional_mean, grid, desc="F(mu), out-of-sample",
-                                seed=settings.seed)
-    runtimes["library_conditional_mean"] = time.perf_counter() - t0
+        F_mu = cached_daily_values(settings.value_cache_dir, library, config, prices.conditional_mean,
+                                   grid, "F(mu)", settings.seed)
+        F_mu_reg, F_mu_oos = F_mu[:n_reg], F_mu[n_reg:]
+        runtimes["library_conditional_mean"] = time.perf_counter() - t0
     t0 = time.perf_counter()
-    F_reg = daily_values(library, reg.da, grid, desc="F(p), regression paths", seed=settings.seed)
-    F_oos = daily_values(library, oos.da, grid, desc="F(p), out-of-sample", seed=settings.seed)
+    F_all = cached_daily_values(settings.value_cache_dir, library, config, prices.da, grid, "F(p)",
+                                settings.seed)
+    F_reg, F_oos = F_all[:n_reg], F_all[n_reg:]
     runtimes["library_prices"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
