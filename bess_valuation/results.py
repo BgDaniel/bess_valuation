@@ -116,6 +116,7 @@ class Result:
             "cycles_per_day_mean": float(np.mean(fwd.cycles)) if fwd.cycles is not None else float("nan"),
             "cycles_per_day_max": float(np.max(fwd.cycles)) if fwd.cycles is not None else float("nan"),
             "regression_r2_mean": float(np.nanmean(bw.r2)) if np.isfinite(bw.r2).any() else float("nan"),
+            "regression_r2_median": float(np.nanmedian(bw.r2)) if np.isfinite(bw.r2).any() else float("nan"),
             "control_variate_variance_ratio_mean": float(np.mean(bw.var_ratio[:-1])) if bw.var_ratio.shape[0] > 1 else 1.0,
             "concavity_violation_share_mean": float(bw.violation_share.mean()),
             "daily_solver": self.daily_solver,
@@ -133,7 +134,10 @@ class Result:
         """Write the output folder ``root/<config.name>/<YYYYMMDD_HHMMSS>/`` (SPEC section 6).
 
         Contents: ``config.yaml``, ``prices_meta.json``, ``summary.json``, ``summary.csv``,
-        ``paths.parquet`` (per path and day), ``library_stats.json`` and ``figures/*.png``;
+        ``paths.parquet`` (per path and day), ``daily.parquet`` (per day: intrinsic,
+        LSMC and perfect-foresight cashflows), ``regression.parquet`` (per day and SoC grid
+        point: R^2, variance ratio), ``library_stats.json`` (library solver) and
+        ``figures/*.png``;
         with ``dark_figures`` also ``figures_dark/*.png`` (dark theme, used by the app).
 
         Returns:
@@ -151,6 +155,8 @@ class Result:
             writer.writerow(["metric", "value"])
             writer.writerows(summary.items())
         self.paths_frame().to_parquet(run_dir / "paths.parquet", index=False)
+        self.daily_frame().to_parquet(run_dir / "daily.parquet", index=False)
+        self.regression_frame().to_parquet(run_dir / "regression.parquet", index=False)
         if self.library_stats:
             _write_json(run_dir / "library_stats.json", self.library_stats)
         if plots:
@@ -179,6 +185,33 @@ class Result:
         if fwd.cycles is not None:
             frame["cycles"] = fwd.cycles.ravel()
         return pd.DataFrame(frame)
+
+
+    def daily_frame(self) -> pd.DataFrame:
+        """Per day: intrinsic cashflow, LSMC cashflow (mean and quantiles over the out-of-sample
+        paths), perfect-foresight mean, SoC grid indices of the intrinsic schedule, share of
+        paths changed by the concavity projection."""
+        cash = self.forward.cash
+        q05, q25, q50, q75, q95 = np.quantile(cash, [0.05, 0.25, 0.5, 0.75, 0.95], axis=0)
+        return pd.DataFrame({
+            "day": np.arange(cash.shape[1]), "date": self.dates,
+            "cashflow_intrinsic_eur": self.intrinsic_cash,
+            "cashflow_lsmc_mean_eur": cash.mean(axis=0),
+            "cashflow_lsmc_q05_eur": q05, "cashflow_lsmc_q25_eur": q25, "cashflow_lsmc_median_eur": q50,
+            "cashflow_lsmc_q75_eur": q75, "cashflow_lsmc_q95_eur": q95,
+            "cashflow_pf_mean_eur": self.pf_cash.mean(axis=0),
+            "soc_end_intrinsic_mwh": self.grid[self.intrinsic_soc_index[1:]],
+            "projection_share": self.backward.violation_share,
+        })
+
+    def regression_frame(self) -> pd.DataFrame:
+        """Per day and SoC grid point: R^2 of the continuation regression and the variance
+        ratio of the control variate (NaN / 1 on the last day, where C is the terminal value)."""
+        bw = self.backward
+        d, g = bw.r2.shape
+        day, j = np.indices((d, g)).reshape(2, -1)
+        return pd.DataFrame({"day": day, "date": self.dates[day], "soc_mwh": self.grid[j],
+                             "r2": bw.r2.ravel(), "variance_ratio": bw.var_ratio.ravel()})
 
 
 def _write_json(path: Path, data: Any) -> None:

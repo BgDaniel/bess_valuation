@@ -1,8 +1,9 @@
 """Figures (SPEC section 7) and the style shared by all of them.
 
-Valuation figures implemented so far: 1 (value fan), 2 (value decomposition),
-4 (SoC fan and heatmap), 5 (dispatch profile vs DA prices), 9 (continuation value vs
-SoC), 12 (vertex-library diagnostics). Two quantities with different units are shown
+Valuation figures implemented so far: 1 (value fan), 2 (value decomposition), daily
+cashflows (intrinsic, LSMC, perfect foresight), 4 (SoC fan and heatmap), 5 (dispatch
+profile vs DA prices, winter vs summer), 9 (continuation value vs SoC), 12 (vertex-library
+diagnostics, library solver only), 13 (regression R^2, in- vs out-of-sample value). Two quantities with different units are shown
 in stacked panels with a shared x-axis, never on a second y-axis.
 """
 
@@ -245,34 +246,130 @@ def plot_soc(result, out_dir: Path, pdf: bool = False) -> Path:
     return save_figure(fig, out_dir, "04_soc", pdf)
 
 
+SEASONS = {"winter (Dec-Feb)": (12, 1, 2), "summer (Jun-Aug)": (6, 7, 8)}
+
+
 def plot_dispatch_profile(result, out_dir: Path, pdf: bool = False) -> Path:
-    """Plot 5: charge / discharge power per period of day against the DA price fan."""
+    """Plot 5: DA price fan and mean charge / discharge per period of day, winter vs summer.
+
+    Days of the season that are not in the horizon leave an empty column.
+    """
     apply_style()
     fwd = result.forward
     n_t = fwd.charge.shape[2]
     hours = (np.arange(n_t) + 0.5) * result.dt
-    charge = fwd.charge.reshape(-1, n_t) / result.dt
-    discharge = fwd.discharge.reshape(-1, n_t) / result.dt
-    fig, axes = plt.subplots(2, 1, figsize=(8, 6.5), sharex=True, layout="constrained")
-    ax = axes[0]
-    fan(ax, hours, result.da_oos.reshape(-1, n_t).astype(np.float64), label="median DA price")
-    ax.axhline(0, color=INK_SECONDARY, lw=0.8)
-    ax.set_ylabel("DA price [€/MWh]")
-    ax.set_title("DA price per period of day (out-of-sample paths)")
-    ax.legend(loc="upper left", ncol=3)
-    ax = axes[1]
-    ax.fill_between(hours, 0, discharge.mean(axis=0), color=SERIES[0], alpha=0.85, lw=0,
-                    label="discharge, mean")
-    ax.fill_between(hours, 0, -charge.mean(axis=0), color=SERIES[1], alpha=0.85, lw=0,
-                    label="charge, mean (negative)")
-    ax.axhline(0, color=INK_SECONDARY, lw=0.8)
-    ax.set_ylabel("power [MW]")
-    ax.set_title("charge / discharge per period of day")
-    ax.legend(loc="lower left", fontsize=7)
-    hour_axis(ax)
-    fig.suptitle(f"Plot 5 - dispatch profile vs DA prices, {result.config.name}", fontsize=10,
-                 fontweight="bold")
+    months = (result.dates.astype("datetime64[M]").astype(int) % 12) + 1
+    fig, axes = plt.subplots(2, 2, figsize=(11, 6.8), sharex=True, sharey="row", layout="constrained")
+    for col, (season, season_months) in enumerate(SEASONS.items()):
+        days = np.isin(months, season_months)
+        ax_p, ax_d = axes[0, col], axes[1, col]
+        if days.any():
+            prices = result.da_oos[:, days].reshape(-1, n_t).astype(np.float64)
+            charge = fwd.charge[:, days].reshape(-1, n_t) / result.dt
+            discharge = fwd.discharge[:, days].reshape(-1, n_t) / result.dt
+            fan(ax_p, hours, prices, label="median DA price")
+            ax_d.fill_between(hours, 0, discharge.mean(axis=0), color=SERIES[0], lw=0,
+                              label="discharge, mean")
+            ax_d.fill_between(hours, 0, -charge.mean(axis=0), color=SERIES[1], lw=0,
+                              label="charge, mean (negative)")
+        else:
+            ax_p.text(0.5, 0.5, "no days of this season in the horizon", transform=ax_p.transAxes,
+                      ha="center", color=INK_SECONDARY)
+        n_days = int(days.sum())
+        ax_p.set_title(f"{season}: DA price per period of day ({n_days} days)")
+        ax_d.set_title(f"{season}: charge / discharge")
+        for ax in (ax_p, ax_d):
+            ax.axhline(0, color=INK_SECONDARY, lw=0.8)
+        hour_axis(ax_d)
+    axes[0, 0].set_ylabel("DA price [€/MWh]")
+    axes[1, 0].set_ylabel("power [MW]")
+    axes[0, 0].legend(loc="upper left", ncol=3)
+    axes[1, 0].legend(loc="lower left", fontsize=7)
+    fig.suptitle(f"Plot 5 - dispatch profile vs DA prices by season, {result.config.name}",
+                 fontsize=10, fontweight="bold")
     return save_figure(fig, out_dir, "05_dispatch_profile", pdf)
+
+
+def plot_daily_cashflow(result, out_dir: Path, pdf: bool = False) -> Path:
+    """Daily cashflow: LSMC across out-of-sample paths, intrinsic schedule, perfect foresight."""
+    apply_style()
+    x = np.arange(len(result.dates))
+    cash = result.forward.cash
+    fig, axes = plt.subplots(2, 1, figsize=(9, 6.5), sharex=True, layout="constrained",
+                             gridspec_kw={"height_ratios": [1.6, 1]})
+    ax = axes[0]
+    fan(ax, x, cash, label="LSMC median")
+    ax.plot(x, cash.mean(axis=0), color=INK, lw=1.0, label="LSMC mean")
+    ax.plot(x, result.intrinsic_cash, color=SERIES[1], lw=1.2, label="intrinsic (mean prices)")
+    ax.plot(x, result.pf_cash.mean(axis=0), color=SERIES[2], lw=1.0, label="perfect foresight (mean)")
+    ax.set_ylabel("daily cashflow [€]")
+    ax.set_title("daily cashflow across out-of-sample paths")
+    ax.legend(loc="upper left", ncol=3, fontsize=7)
+    ax = axes[1]
+    window = max(1, min(7, len(x)))
+    kernel = np.ones(window) / window
+    extr = np.convolve(cash.mean(axis=0) - result.intrinsic_cash, kernel, mode="same")
+    gap = np.convolve(result.pf_cash.mean(axis=0) - cash.mean(axis=0), kernel, mode="same")
+    ax.plot(x, extr, color=SERIES[0], lw=1.5, label="LSMC mean - intrinsic (extrinsic)")
+    ax.plot(x, gap, color=SERIES[2], lw=1.5, label="perfect foresight - LSMC mean")
+    ax.axhline(0, color=INK_SECONDARY, lw=0.8)
+    ax.set_ylabel("€ per day (7-day mean)")
+    ax.set_title("extrinsic value and gap to perfect foresight per day")
+    ax.legend(loc="upper left", fontsize=7)
+    _date_ticks(ax, result.dates)
+    fig.suptitle(f"Daily cashflows, {result.config.name}", fontsize=10, fontweight="bold")
+    return save_figure(fig, out_dir, "03_daily_cashflow", pdf)
+
+
+def plot_regression(result, out_dir: Path, pdf: bool = False) -> Path:
+    """Plot 13: R^2 of the continuation regression per day, in-sample vs out-of-sample value."""
+    apply_style()
+    bw = result.backward
+    x = np.arange(len(result.dates))
+    has_cv = bool(np.any(bw.var_ratio != 1.0))
+    fig, axes = plt.subplots(1, 3 if has_cv else 2, figsize=(13 if has_cv else 10, 3.8),
+                             layout="constrained", gridspec_kw={"width_ratios": [2.2, 1] + ([1.4] if has_cv else [])})
+    ax = axes[0]
+    r2 = np.where(np.isfinite(bw.r2), bw.r2, np.nan)
+    valid = np.isfinite(r2).any(axis=1)
+    lo = np.full(len(x), np.nan)
+    hi = np.full(len(x), np.nan)
+    mid = np.full(len(x), np.nan)
+    lo[valid] = np.nanmin(r2[valid], axis=1)
+    hi[valid] = np.nanmax(r2[valid], axis=1)
+    mid[valid] = np.nanmean(r2[valid], axis=1)
+    ax.fill_between(x, lo, hi, color=BLUE_RAMP[1], lw=0, label="min-max over end SoC")
+    ax.plot(x, mid, color=BLUE_RAMP[-2], lw=1.2, label="mean over end SoC")
+    ax.set_ylim(min(0.0, np.nanmin(lo) if valid.any() else 0.0), 1.0)
+    ax.set_ylabel("R² of the continuation regression")
+    ax.set_title("regression fit per day")
+    ax.legend(loc="upper left", fontsize=7)
+    _date_ticks(ax, result.dates)
+    ax = axes[1]
+    s = result.summary()
+    labels = ["intrinsic", "LSMC\nin-sample", "LSMC\nout-of-sample", "perfect\nforesight"]
+    values = [s["value_intrinsic_eur"], s["value_in_sample_eur"], s["value_oos_eur"],
+              s["value_perfect_foresight_eur"]]
+    colors = [SERIES[1], BLUE_RAMP[2], SERIES[0], SERIES[2]]
+    ax.bar(np.arange(4), np.array(values) / 1e3, color=colors, width=0.7, edgecolor=SURFACE, lw=1)
+    ax.errorbar([2], [values[2] / 1e3], yerr=[2 * s["value_oos_stderr_eur"] / 1e3], color=INK,
+                capsize=4, lw=1.2)
+    for k, v in enumerate(values):
+        ax.text(k, v / 1e3, f"{v / 1e3:.1f}", ha="center", va="bottom", fontsize=8, color=INK)
+    ax.set_xticks(np.arange(4))
+    ax.set_xticklabels(labels, fontsize=8)
+    ax.set_ylabel("value [k€]")
+    ax.set_ylim(0, max(values) / 1e3 * 1.12)
+    ax.set_title("values (error bar: ±2 standard errors)")
+    if has_cv:
+        ax = axes[2]
+        ax.plot(x[:-1], bw.var_ratio[:-1].mean(axis=1), color=SERIES[0], lw=1.2)
+        ax.axhline(1.0, color=INK_SECONDARY, lw=0.8, ls="--")
+        ax.set_ylabel("Var(V) / Var(V - h)")
+        ax.set_title("variance reduction by the control variate")
+        _date_ticks(ax, result.dates)
+    fig.suptitle(f"Plot 13 - regression diagnostics, {result.config.name}", fontsize=10, fontweight="bold")
+    return save_figure(fig, out_dir, "13_regression", pdf)
 
 
 def plot_continuation(result, out_dir: Path, pdf: bool = False) -> Path:
@@ -364,8 +461,8 @@ def plot_results(result, out_dir: Path, pdf: bool = False, theme: str = "light")
     previous = THEME
     apply_style(theme)
     try:
-        funcs = [plot_value_fan, plot_value_decomposition, plot_soc, plot_dispatch_profile,
-                 plot_continuation]
+        funcs = [plot_value_fan, plot_value_decomposition, plot_daily_cashflow, plot_soc,
+                 plot_dispatch_profile, plot_continuation, plot_regression]
         if result.library is not None and result.library.pairs:
             funcs.append(plot_library)
         return [f(result, out_dir, pdf) for f in funcs]

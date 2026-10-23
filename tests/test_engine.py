@@ -116,7 +116,15 @@ class TestEngine(unittest.TestCase):
                 self.assertTrue((run_dir / name).exists(), name)
             # default solver "dp": no vertex library, hence no library stats / plot 12
             self.assertFalse((run_dir / "library_stats.json").exists())
-            self.assertEqual(len(list((run_dir / "figures").glob("*.png"))), 5)
+            self.assertEqual(len(list((run_dir / "figures").glob("*.png"))), 7)
+            daily = pd.read_parquet(run_dir / "daily.parquet")
+            self.assertEqual(len(daily), self.prices.n_days)
+            np.testing.assert_allclose(daily["cashflow_intrinsic_eur"].sum(), self.result.intrinsic_value
+                                       - CONFIG.terminal_soc_value * daily["soc_end_intrinsic_mwh"].iloc[-1],
+                                       atol=1e-6)
+            reg = pd.read_parquet(run_dir / "regression.parquet")
+            self.assertEqual(len(reg), self.prices.n_days * CONFIG.soc_grid_size)
+            self.assertTrue(reg["r2"].iloc[:-CONFIG.soc_grid_size].notna().all())
             frame = pd.read_parquet(run_dir / "paths.parquet")
             n_oos = self.prices.n_paths - self.prices.n_paths // 2
             self.assertEqual(len(frame), n_oos * self.prices.n_days)
@@ -178,7 +186,7 @@ class TestVariants(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = results["library"].save(tmp, plots=True)
             self.assertTrue((run_dir / "library_stats.json").exists())
-            self.assertEqual(len(list((run_dir / "figures").glob("*.png"))), 6)
+            self.assertEqual(len(list((run_dir / "figures").glob("*.png"))), 8)
 
     def test_simultaneous_allowed_is_not_worse(self):
         p = prices(n_paths=20, n_days=10, seed=4)

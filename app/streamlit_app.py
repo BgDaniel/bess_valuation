@@ -30,10 +30,12 @@ STATE_LABELS = {"queued": "● wartet", "running": "● läuft", "done": "● fe
 FIGURE_TITLES = {
     "01_value_fan": "Wertverlauf",
     "02_value_decomposition": "Wertzerlegung",
+    "03_daily_cashflow": "Tägliche Cashflows",
     "04_soc": "Ladezustand",
     "05_dispatch_profile": "Fahrprofil vs. Preise",
     "09_continuation_value": "Fortsetzungswert",
     "12_vertex_library": "Vertex-Library",
+    "13_regression": "Regression (R²)",
 }
 
 CSS = """
