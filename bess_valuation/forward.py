@@ -17,6 +17,7 @@ by the usable capacity, :math:`\sum_t (d_t/\eta_d) / (e_{max} - e_{min})`.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -60,7 +61,8 @@ class ForwardResult:
 
 
 def forward_simulation(model: RegressionModel, F: np.ndarray, feats: np.ndarray,
-                       F_mu: np.ndarray | None, i0: int, project: bool = True) -> ForwardResult:
+                       F_mu: np.ndarray | None, i0: int, project: bool = True,
+                       progress: Callable[[float], None] | None = None) -> ForwardResult:
     """Apply the fitted policy on (out-of-sample) paths.
 
     Args:
@@ -70,6 +72,7 @@ def forward_simulation(model: RegressionModel, F: np.ndarray, feats: np.ndarray,
         F_mu: F(s_j, s_k, mu(X_t)) for the control variate, shape (N, D, G, G), or None.
         i0: Grid index of the initial SoC.
         project: Apply the concave projection to the continuation values.
+        progress: Optional callback with the finished fraction (0..1) after each day.
 
     Returns:
         SoC indices and daily cashflows (schedules are attached by :func:`attach_schedules`).
@@ -87,6 +90,8 @@ def forward_simulation(model: RegressionModel, F: np.ndarray, feats: np.ndarray,
         j = np.argmax(cand, axis=1)
         cash[:, t] = F[rows, t, idx[:, t], j]
         idx[:, t + 1] = j
+        if progress is not None:
+            progress((t + 1) / n_days)
     terminal = model.terminal[idx[:, -1]]
     return ForwardResult(soc_index=idx, cash=cash, terminal=terminal)
 
@@ -121,7 +126,8 @@ def grid_bellman(F: np.ndarray, i0: int, terminal: np.ndarray) -> tuple[np.ndarr
 
 
 def attach_schedules(result: ForwardResult, library: VertexLibrary, prices: np.ndarray,
-                     grid: np.ndarray, config: BatteryConfig, seed: int = 0) -> None:
+                     grid: np.ndarray, config: BatteryConfig, seed: int = 0,
+                     progress: Callable[[float], None] | None = None) -> None:
     """Fill charge, discharge, SoC per period and cycles of a forward result in place.
 
     Args:
@@ -131,11 +137,13 @@ def attach_schedules(result: ForwardResult, library: VertexLibrary, prices: np.n
         grid: SoC grid [MWh].
         config: Battery parameters.
         seed: Library processing order.
+        progress: Optional callback with the finished fraction (0..1).
     """
     n_paths, n_days, n_t = prices.shape
     s_start = grid[result.soc_index[:, :-1]].ravel()
     s_end = grid[result.soc_index[:, 1:]].ravel()
-    revenue, c, d = daily_schedules(library, prices.reshape(-1, n_t), s_start, s_end, seed=seed)
+    revenue, c, d = daily_schedules(library, prices.reshape(-1, n_t), s_start, s_end, seed=seed,
+                                    progress=progress)
     gap = np.max(np.abs(revenue - result.cash.ravel()), initial=0.0)
     if gap > 1e-6 * max(1.0, float(np.abs(result.cash).max(initial=0.0))):
         raise RuntimeError(f"schedule revenue differs from the daily value by {gap:.3g} EUR")

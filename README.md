@@ -38,6 +38,19 @@ to disable), `--results`, `--plots/--no-plots`. Numerical settings in Python:
 
 End-to-end example (DA only so far): `poetry run python examples/run_synthetic.py`.
 
+## App
+
+A Streamlit front end (dark theme) to configure and start runs, follow their progress
+and inspect results:
+
+```bash
+poetry install --with app
+poetry run streamlit run app/streamlit_app.py
+```
+
+Runs are started as background jobs (`bess_valuation/jobs.py`, folders under
+`results/_jobs/`), so they keep running when the browser is closed.
+
 ## Status
 
 Milestones 1-3 done: prices and generator, polytope, Numba simplex, vertex library

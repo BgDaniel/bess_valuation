@@ -17,36 +17,69 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-# Categorical slots in fixed order (validated default palette); one per auction stage.
-SERIES = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948")
-STAGE_COLORS = {"da": SERIES[0], "ida1": SERIES[1], "ida2": SERIES[2], "ida3": SERIES[3]}
+# Colour tokens per theme. Categorical slots in fixed order (validated default palette:
+# light steps on the light surface, dark steps checked against the dark-blue surface).
+THEMES = {
+    "light": {
+        "series": ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"),
+        # sequential blue ramp for quantile fans: [1] 5-95 band, [2] 25-75 band, [-2] median
+        "blue_ramp": ("#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95"),
+        "cmap": ("#f4f8fd", "#9ec5f4", "#3987e5", "#184f95"),
+        "surface": "#fcfcfb", "ink": "#0b0b0b", "ink_secondary": "#52514e", "grid": "#e4e3df",
+    },
+    "dark": {
+        "series": ("#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"),
+        "blue_ramp": ("#0d366b", "#184f95", "#256abf", "#3987e5", "#9ec5f4", "#cde2fb"),
+        "cmap": ("#101b2c", "#184f95", "#3987e5", "#9ec5f4"),
+        "surface": "#0b0f17", "ink": "#e6e9ef", "ink_secondary": "#9aa4b2", "grid": "#1e2633",
+    },
+}
 STAGE_LABELS = {"da": "DA", "ida1": "IDA1", "ida2": "IDA2", "ida3": "IDA3"}
 
-# Sequential blue ramp, light -> dark, for quantile fans.
-BLUE_RAMP = ("#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95")
-
-SURFACE = "#fcfcfb"
-INK = "#0b0b0b"
-INK_SECONDARY = "#52514e"
-GRID = "#e4e3df"
+# Active tokens; apply_style(theme) switches them (module globals, read at plot time).
+THEME = "light"
+SERIES = THEMES["light"]["series"]
+STAGE_COLORS = {"da": SERIES[0], "ida1": SERIES[1], "ida2": SERIES[2], "ida3": SERIES[3]}
+BLUE_RAMP = THEMES["light"]["blue_ramp"]
+SURFACE = THEMES["light"]["surface"]
+INK = THEMES["light"]["ink"]
+INK_SECONDARY = THEMES["light"]["ink_secondary"]
+GRID = THEMES["light"]["grid"]
 
 DPI = 150
 
 
-def apply_style() -> None:
-    """Set the matplotlib rcParams used by every figure of the package."""
+def apply_style(theme: str | None = None) -> None:
+    """Set the matplotlib rcParams used by every figure of the package.
+
+    Args:
+        theme: "light" (reports) or "dark" (app); None keeps the active theme.
+    """
+    global THEME, SERIES, STAGE_COLORS, BLUE_RAMP, SURFACE, INK, INK_SECONDARY, GRID
+    if theme is not None:
+        if theme not in THEMES:
+            raise ValueError(f"unknown theme {theme!r}")
+        THEME = theme
+        tok = THEMES[theme]
+        SERIES = tok["series"]
+        STAGE_COLORS = {"da": SERIES[0], "ida1": SERIES[1], "ida2": SERIES[2], "ida3": SERIES[3]}
+        BLUE_RAMP = tok["blue_ramp"]
+        SURFACE, INK, INK_SECONDARY, GRID = tok["surface"], tok["ink"], tok["ink_secondary"], tok["grid"]
     plt.rcParams.update({
         "figure.facecolor": SURFACE,
         "axes.facecolor": SURFACE,
         "savefig.facecolor": SURFACE,
         "axes.edgecolor": INK_SECONDARY,
         "axes.labelcolor": INK,
+        "axes.titlecolor": INK,
+        "text.color": INK,
         "axes.titlesize": 10,
         "axes.titleweight": "bold",
         "axes.labelsize": 9,
         "axes.spines.top": False,
         "axes.spines.right": False,
         "axes.grid": True,
+        "axes.axisbelow": True,
         "grid.color": GRID,
         "grid.linewidth": 0.6,
         "xtick.color": INK_SECONDARY,
@@ -55,12 +88,20 @@ def apply_style() -> None:
         "ytick.labelsize": 8,
         "legend.fontsize": 8,
         "legend.frameon": False,
+        "legend.labelcolor": INK,
         "lines.linewidth": 1.5,
         "font.size": 9,
     })
 
 
-def fan(ax: plt.Axes, x: np.ndarray, samples: np.ndarray, color_ramp: tuple[str, ...] = BLUE_RAMP,
+def sequential_cmap() -> matplotlib.colors.Colormap:
+    """One-hue blue colormap of the active theme (low values recede into the surface)."""
+    from matplotlib.colors import LinearSegmentedColormap
+
+    return LinearSegmentedColormap.from_list(f"blue_{THEME}", THEMES[THEME]["cmap"])
+
+
+def fan(ax: plt.Axes, x: np.ndarray, samples: np.ndarray, color_ramp: tuple[str, ...] | None = None,
         label: str | None = None) -> None:
     """Draw a quantile fan (5/25/50/75/95 %) of ``samples`` along axis 0.
 
@@ -68,9 +109,10 @@ def fan(ax: plt.Axes, x: np.ndarray, samples: np.ndarray, color_ramp: tuple[str,
         ax: Target axes.
         x: Positions, shape (K,).
         samples: Values, shape (S, K); quantiles are taken over S, NaNs ignored.
-        color_ramp: Light-to-dark colours; [1] for the 5-95 band, [2] for 25-75, [-2] median.
+        color_ramp: Ramp; [1] for the 5-95 band, [2] for 25-75, [-2] median (default: theme).
         label: Legend label of the median line.
     """
+    color_ramp = color_ramp or BLUE_RAMP
     q05, q25, q50, q75, q95 = np.nanquantile(samples, [0.05, 0.25, 0.5, 0.75, 0.95], axis=0)
     ax.fill_between(x, q05, q95, color=color_ramp[1], lw=0, label="5–95 %")
     ax.fill_between(x, q25, q75, color=color_ramp[2], lw=0, label="25–75 %")
@@ -190,7 +232,7 @@ def plot_soc(result, out_dir: Path, pdf: bool = False) -> Path:
     ax.legend(loc="lower left", bbox_to_anchor=(0.0, 1.08), ncol=3)
     ax = axes[1]
     med = np.median(fwd.soc, axis=0).T  # (T, D)
-    im = ax.imshow(med, aspect="auto", origin="lower", cmap="Blues",
+    im = ax.imshow(med, aspect="auto", origin="lower", cmap=sequential_cmap(),
                    extent=(-0.5, med.shape[1] - 0.5, 0, 24), vmin=result.config.e_min,
                    vmax=result.config.e_max, interpolation="nearest")
     ax.set_yticks(range(0, 25, 4))
@@ -317,7 +359,13 @@ def plot_library(result, out_dir: Path, pdf: bool = False) -> Path:
     return save_figure(fig, out_dir, "12_vertex_library", pdf)
 
 
-def plot_results(result, out_dir: Path, pdf: bool = False) -> list[Path]:
-    """Write all valuation figures implemented so far; returns their paths."""
-    return [f(result, out_dir, pdf) for f in (plot_value_fan, plot_value_decomposition, plot_soc,
-                                              plot_dispatch_profile, plot_continuation, plot_library)]
+def plot_results(result, out_dir: Path, pdf: bool = False, theme: str = "light") -> list[Path]:
+    """Write all valuation figures implemented so far in the given theme; returns their paths."""
+    previous = THEME
+    apply_style(theme)
+    try:
+        return [f(result, out_dir, pdf) for f in (plot_value_fan, plot_value_decomposition, plot_soc,
+                                                  plot_dispatch_profile, plot_continuation,
+                                                  plot_library)]
+    finally:
+        apply_style(previous)

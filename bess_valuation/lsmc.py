@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -240,7 +241,8 @@ def continuation(model: RegressionModel, t: int, feats: np.ndarray,
 
 def backward_induction(F: np.ndarray, feats: np.ndarray, grid: np.ndarray,
                        terminal_soc_value: float, settings: EngineSettings,
-                       F_mu: np.ndarray | None = None) -> BackwardResult:
+                       F_mu: np.ndarray | None = None,
+                       progress: Callable[[float], None] | None = None) -> BackwardResult:
     """LSMC backward induction on the regression paths.
 
     Args:
@@ -250,6 +252,7 @@ def backward_induction(F: np.ndarray, feats: np.ndarray, grid: np.ndarray,
         terminal_soc_value: Value of the SoC left after the last day [€/MWh].
         settings: Degree, projection and control-variate switches.
         F_mu: F(s_j, s_k, mu(X_t)) for the control variate, shape (N, D, G, G), or None.
+        progress: Optional callback with the finished fraction (0..1) after each day.
 
     Returns:
         Fitted model, realised values and diagnostics.
@@ -316,6 +319,8 @@ def backward_induction(F: np.ndarray, feats: np.ndarray, grid: np.ndarray,
                 v_t[:, i] = F[rows, t, i, j] + v_next[rows, j]
                 bar.update()
             v_after, v_next = v_next, v_t
+            if progress is not None:
+                progress((n_days - t) / n_days)
     return BackwardResult(model=model, value=v_next, r2=r2, var_ratio=var_ratio,
                           violation_share=violation, curve_days=plot_days, curve_raw=curve_raw,
                           curve_projected=curve_proj, curve_samples_raw=samp_raw,

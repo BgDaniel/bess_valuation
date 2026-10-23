@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -123,11 +124,13 @@ class Result:
             **{f"runtime_{k}_s": v for k, v in self.runtimes.items()},
         }
 
-    def save(self, root: str | Path = "results", plots: bool = True, pdf: bool = False) -> Path:
+    def save(self, root: str | Path = "results", plots: bool = True, pdf: bool = False,
+             dark_figures: bool = False) -> Path:
         """Write the output folder ``root/<config.name>/<YYYYMMDD_HHMMSS>/`` (SPEC section 6).
 
         Contents: ``config.yaml``, ``prices_meta.json``, ``summary.json``, ``summary.csv``,
-        ``paths.parquet`` (per path and day), ``library_stats.json`` and ``figures/*.png``.
+        ``paths.parquet`` (per path and day), ``library_stats.json`` and ``figures/*.png``;
+        with ``dark_figures`` also ``figures_dark/*.png`` (dark theme, used by the app).
 
         Returns:
             The run folder.
@@ -150,6 +153,8 @@ class Result:
 
             figures = plot_results(self, run_dir / "figures", pdf=pdf)
             logger.info("%d figures written to %s", len(figures), run_dir / "figures")
+            if dark_figures:
+                plot_results(self, run_dir / "figures_dark", theme="dark")
         self.run_dir = run_dir
         logger.info("results saved to %s", run_dir)
         return run_dir
@@ -185,7 +190,8 @@ def _json_default(obj: Any) -> Any:
 
 
 def cached_daily_values(cache_dir: str | Path | None, library: VertexLibrary, config: BatteryConfig,
-                        prices: np.ndarray, grid: np.ndarray, desc: str, seed: int = 0) -> np.ndarray:
+                        prices: np.ndarray, grid: np.ndarray, desc: str, seed: int = 0,
+                        progress: Callable[[float], None] | None = None) -> np.ndarray:
     """:func:`daily_values` with a file cache keyed by battery physics, SoC grid and prices.
 
     The key is a SHA-256 over the config hash (physical parameters only), the grid, the
@@ -200,12 +206,13 @@ def cached_daily_values(cache_dir: str | Path | None, library: VertexLibrary, co
         grid: SoC grid [MWh].
         desc: Progress-bar label.
         seed: Library processing order.
+        progress: Optional callback with the finished fraction (0..1).
 
     Returns:
         Daily values [€], shape (N, D, G, G).
     """
     if cache_dir is None:
-        return daily_values(library, prices, grid, desc=desc, seed=seed)
+        return daily_values(library, prices, grid, desc=desc, seed=seed, progress=progress)
     h = hashlib.sha256()
     h.update(config.config_hash.encode())
     h.update(np.ascontiguousarray(grid, dtype=np.float64).tobytes())
@@ -215,8 +222,10 @@ def cached_daily_values(cache_dir: str | Path | None, library: VertexLibrary, co
     path = Path(cache_dir) / f"{config.config_hash}_{h.hexdigest()[:16]}.npy"
     if path.exists():
         logger.info("%s: loaded cached daily values from %s", desc, path)
+        if progress is not None:
+            progress(1.0)
         return np.load(path)
-    F = daily_values(library, prices, grid, desc=desc, seed=seed)
+    F = daily_values(library, prices, grid, desc=desc, seed=seed, progress=progress)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp.npy")
     np.save(tmp, F)
@@ -225,8 +234,38 @@ def cached_daily_values(cache_dir: str | Path | None, library: VertexLibrary, co
     return F
 
 
+# Rough share of the work per step (used only to turn step progress into overall progress).
+STAGE_WEIGHTS = {"daily values (conditional means)": 0.4, "daily values (prices)": 1.0,
+                 "backward induction": 0.004, "forward simulation": 0.004, "schedules": 0.015,
+                 "intrinsic and perfect foresight": 0.002}
+
+
+def _stage_progress(progress: Callable[[str, float], None] | None, stages: list[str]
+                    ) -> Callable[[str], Callable[[float], None] | None]:
+    """Turn per-step fractions into overall progress calls ``progress(step, overall)``."""
+    total = sum(STAGE_WEIGHTS[s] for s in stages)
+    offsets = {}
+    acc = 0.0
+    for stage in stages:
+        offsets[stage] = acc
+        acc += STAGE_WEIGHTS[stage]
+
+    def for_stage(stage: str) -> Callable[[float], None] | None:
+        if progress is None:
+            return None
+
+        def report(fraction: float) -> None:
+            progress(stage, min(1.0, (offsets[stage] + STAGE_WEIGHTS[stage] * fraction) / total))
+
+        report(0.0)
+        return report
+
+    return for_stage
+
+
 def run_engine(config: BatteryConfig, prices: PriceScenarios,
-               settings: EngineSettings | None = None) -> Result:
+               settings: EngineSettings | None = None,
+               progress: Callable[[str, float], None] | None = None) -> Result:
     """Value the battery on DA prices: backward induction plus forward simulation.
 
     The paths are split into a regression set (first ``n_regression_paths``) and an
@@ -237,6 +276,8 @@ def run_engine(config: BatteryConfig, prices: PriceScenarios,
         config: Battery parameters.
         prices: Price scenarios (only DA is used so far).
         settings: Numerical settings; defaults if None.
+        progress: Optional callback ``progress(step name, overall fraction 0..1)``, called
+            regularly (e.g. by the app for its progress bar and remaining-time estimate).
 
     Returns:
         The result; call :meth:`Result.save` to write the output folder.
@@ -262,37 +303,47 @@ def run_engine(config: BatteryConfig, prices: PriceScenarios,
     use_cv = settings.control_variate and prices.conditional_mean is not None
     if settings.control_variate and not use_cv:
         logger.warning("no conditional_mean in the scenarios: control variate disabled")
+    stages = (["daily values (conditional means)"] if use_cv else []) + [
+        "daily values (prices)", "backward induction", "forward simulation", "schedules",
+        "intrinsic and perfect foresight"]
+    stage = _stage_progress(progress, stages)
 
     t0 = time.perf_counter()
     F_mu_reg = F_mu_oos = None
     if use_cv:
         F_mu = cached_daily_values(settings.value_cache_dir, library, config, prices.conditional_mean,
-                                   grid, "F(mu)", settings.seed)
+                                   grid, "F(mu)", settings.seed,
+                                   stage("daily values (conditional means)"))
         F_mu_reg, F_mu_oos = F_mu[:n_reg], F_mu[n_reg:]
         runtimes["library_conditional_mean"] = time.perf_counter() - t0
     t0 = time.perf_counter()
     F_all = cached_daily_values(settings.value_cache_dir, library, config, prices.da, grid, "F(p)",
-                                settings.seed)
+                                settings.seed, stage("daily values (prices)"))
     F_reg, F_oos = F_all[:n_reg], F_all[n_reg:]
     runtimes["library_prices"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    backward = backward_induction(F_reg, feats_reg, grid, config.terminal_soc_value, settings, F_mu_reg)
+    backward = backward_induction(F_reg, feats_reg, grid, config.terminal_soc_value, settings, F_mu_reg,
+                                  progress=stage("backward induction"))
     runtimes["backward_induction"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
     forward = forward_simulation(backward.model, F_oos, feats_oos, F_mu_oos, i0,
-                                 settings.concave_projection)
-    attach_schedules(forward, library, oos.da, grid, config, seed=settings.seed)
+                                 settings.concave_projection, progress=stage("forward simulation"))
+    attach_schedules(forward, library, oos.da, grid, config, seed=settings.seed,
+                     progress=stage("schedules"))
     runtimes["forward_simulation"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
+    done = stage("intrinsic and perfect foresight")
     mean_path = oos.da.astype(np.float64).mean(axis=0)
     F_bar = daily_values(library, mean_path[None], grid, desc="F(mean price)", seed=settings.seed)
     terminal = config.terminal_soc_value * grid
     iv, icash, iidx = grid_bellman(F_bar, i0, terminal)
     pf_value, pf_cash, _ = grid_bellman(F_oos, i0, terminal)
     runtimes["intrinsic_and_perfect_foresight"] = time.perf_counter() - t0
+    if done is not None:
+        done(1.0)
 
     if settings.library_dir is not None:
         save_library(library, library_path(settings.library_dir, config, "full"))

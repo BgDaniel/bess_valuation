@@ -16,6 +16,7 @@ backward induction itself never solves an LP.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 import numpy as np
 from tqdm import tqdm
@@ -32,7 +33,8 @@ def soc_grid(config: BatteryConfig) -> np.ndarray:
 
 
 def daily_values(library: VertexLibrary, prices: np.ndarray, grid: np.ndarray,
-                 cycle_cost: float = 0.0, desc: str = "daily values", seed: int = 0) -> np.ndarray:
+                 cycle_cost: float = 0.0, desc: str = "daily values", seed: int = 0,
+                 progress: Callable[[float], None] | None = None) -> np.ndarray:
     """F(s_i, s_j, p) for every price vector and SoC grid pair.
 
     Args:
@@ -42,6 +44,7 @@ def daily_values(library: VertexLibrary, prices: np.ndarray, grid: np.ndarray,
         cycle_cost: Cycle cost lambda [€/MWh discharged].
         desc: Progress-bar label.
         seed: Seed of the library processing order.
+        progress: Optional callback with the finished fraction (0..1) after each SoC pair.
 
     Returns:
         Revenues [€], shape (..., G, G) with axes (s_start, s_end); -inf for SoC pairs
@@ -59,11 +62,14 @@ def daily_values(library: VertexLibrary, prices: np.ndarray, grid: np.ndarray,
             for j in range(g):
                 _, out[:, i, j] = library.lookup(flat, grid[i], grid[j], cycle_cost, seed=seed)
                 bar.update()
+                if progress is not None:
+                    progress((i * g + j + 1) / (g * g))
     return out.reshape(lead + (g, g))
 
 
 def daily_schedules(library: VertexLibrary, prices: np.ndarray, s_start: np.ndarray,
-                    s_end: np.ndarray, cycle_cost: float = 0.0, seed: int = 0
+                    s_end: np.ndarray, cycle_cost: float = 0.0, seed: int = 0,
+                    progress: Callable[[float], None] | None = None
                     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Optimal schedules for individual (price vector, s_start, s_end) triples.
 
@@ -74,6 +80,7 @@ def daily_schedules(library: VertexLibrary, prices: np.ndarray, s_start: np.ndar
         s_end: End SoC per row [MWh], shape (Q,), values on the grid.
         cycle_cost: Cycle cost lambda [€/MWh discharged].
         seed: Seed of the library processing order.
+        progress: Optional callback with the finished fraction (0..1) after each SoC pair.
 
     Returns:
         (revenue [€] (Q,), charge [MWh] (Q, T), discharge [MWh] (Q, T)).
@@ -85,8 +92,10 @@ def daily_schedules(library: VertexLibrary, prices: np.ndarray, s_start: np.ndar
     discharge = np.empty((n_q, n_t))
     pairs = np.stack([np.round(s_start, 9), np.round(s_end, 9)], axis=1)
     keys, inverse = np.unique(pairs, axis=0, return_inverse=True)
-    for k, (s0, s1) in enumerate(keys):
+    for k, (s0, s1) in enumerate(tqdm(keys, desc="schedules", unit="pair", leave=False)):
         rows = np.flatnonzero(inverse.ravel() == k)
         _, revenue[rows], charge[rows], discharge[rows] = library.lookup(
             prices[rows], s0, s1, cycle_cost, seed=seed, return_schedule=True)
+        if progress is not None:
+            progress((k + 1) / len(keys))
     return revenue, charge, discharge
